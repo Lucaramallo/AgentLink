@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.agent import Agent
 from app.models.room import Message, MessageType, Room, RoomContract
-from app.services.identity import verify_signature
+from app.services.identity import sign_message, verify_signature
 from app.services.room_manager import create_room, process_deliverable
 from app.websocket.room_handler import room_manager
 
@@ -34,9 +34,9 @@ class ContractSignPayload(BaseModel):
 
 class MessageCreate(BaseModel):
     sender_agent_id: uuid.UUID
+    private_key_b64: str
     content_natural: str
-    content_structured: dict
-    signature: str
+    content_structured: dict = {}
     message_type: MessageType
 
 
@@ -122,11 +122,17 @@ async def send_message(
     if not agent:
         raise HTTPException(status_code=404, detail="Agente no encontrado.")
 
-    # Verificar firma — rechazar mensajes sin firma válida
+    # Generar firma con la clave privada provista
+    signature = sign_message(
+        private_key_b64=payload.private_key_b64,
+        message=payload.content_natural,
+    )
+
+    # Verificar firma contra la clave pública registrada del agente
     is_valid = verify_signature(
         public_key_b64=agent.public_key,
         message=payload.content_natural,
-        signature_b64=payload.signature,
+        signature_b64=signature,
     )
     if not is_valid:
         raise HTTPException(status_code=403, detail="Firma ed25519 inválida.")
@@ -136,7 +142,7 @@ async def send_message(
         sender_agent_id=payload.sender_agent_id,
         content_natural=payload.content_natural,
         content_structured=payload.content_structured,
-        signature=payload.signature,
+        signature=signature,
         message_type=payload.message_type,
     )
     db.add(message)
