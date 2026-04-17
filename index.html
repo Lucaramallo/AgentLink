@@ -63,14 +63,14 @@ h1 em{font-style:normal;color:var(--teal)}
 .live-tabs{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:28px}
 .live-tab{font-size:11px;font-weight:600;padding:5px 14px;border-radius:20px;border:0.5px solid var(--border2);color:var(--muted);background:none;cursor:pointer;transition:all .2s}
 .live-tab.active{border-color:var(--teal);color:var(--teal);background:rgba(78,205,196,0.08)}
-.live-split{display:grid;grid-template-columns:1fr 1fr;gap:0;background:var(--bg2);border:0.5px solid var(--border);border-radius:16px;overflow:hidden;min-height:460px}
-.live-diagram{border-right:0.5px solid var(--border);position:relative;background:#070B14;cursor:default}
+.live-split{display:grid;grid-template-columns:1fr 1fr;gap:0;background:var(--bg2);border:0.5px solid var(--border);border-radius:16px;overflow:hidden;min-height:460px;width:100%}
+.live-diagram{border-right:0.5px solid var(--border);position:relative;background:#070B14;cursor:default;min-width:0;overflow:hidden}
 .live-diagram-hint{position:absolute;bottom:10px;left:12px;font-size:9px;color:rgba(255,255,255,0.2);line-height:1.8;pointer-events:none;z-index:2}
 .live-diagram-add{position:absolute;bottom:10px;right:12px;font-size:10px;font-weight:600;color:var(--teal);background:rgba(78,205,196,0.08);border:0.5px solid rgba(78,205,196,0.25);border-radius:6px;padding:5px 10px;cursor:pointer;z-index:2}
 .live-diagram-add:hover{background:rgba(78,205,196,0.15)}
 .live-diagram-pause{position:absolute;top:10px;right:10px;font-size:9px;color:rgba(255,255,255,0.3);z-index:2;pointer-events:none}
 #d-canvas{width:100%;display:block}
-.live-chat{display:flex;flex-direction:column}
+.live-chat{display:flex;flex-direction:column;min-width:0;overflow:hidden}
 .chat-hdr{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:0.5px solid var(--border);background:var(--bg3);flex-shrink:0}
 .chat-hdr-dot{width:7px;height:7px;border-radius:50%}
 .chat-hdr-txt{font-size:11px;color:var(--muted);font-family:monospace}
@@ -441,7 +441,7 @@ const ROLES=['Requester','Contributor','Reviewer','Observer'];
 function dResize(){
   const dpr=window.devicePixelRatio||1;
   const r=dwrap.getBoundingClientRect();
-  dW=r.width;dH=r.height;
+  dW=r.width;dH=Math.max(r.height,400);
   dcv.width=dW*dpr;dcv.height=dH*dpr;
   dcv.style.width=dW+'px';dcv.style.height=dH+'px';
   dctx.scale(dpr,dpr);
