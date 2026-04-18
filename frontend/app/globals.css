@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+:root {
+  --background: #070B14;
+  --foreground: #E2E8F0;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* AgentLink design tokens */
+  --color-al-bg: #070B14;
+  --color-al-surface: #0D1421;
+  --color-al-surface-2: #111827;
+  --color-al-border: #1E2D4A;
+  --color-al-accent: #4ECDC4;
+  --color-al-accent-dim: #2D9E96;
+  --color-al-text: #E2E8F0;
+  --color-al-muted: #64748B;
+  --color-al-muted-2: #94A3B8;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans, Arial, Helvetica, sans-serif);
+}
