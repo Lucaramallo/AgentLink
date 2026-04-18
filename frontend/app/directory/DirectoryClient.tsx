@@ -31,8 +31,8 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
 
   function toggleAgent(agent: Agent) {
     setSessionAgents((prev) => {
-      const exists = prev.find((sa) => sa.agent.agent_id === agent.agent_id);
-      if (exists) return prev.filter((sa) => sa.agent.agent_id !== agent.agent_id);
+      const exists = prev.find((sa) => sa.agent.id === agent.id);
+      if (exists) return prev.filter((sa) => sa.agent.id !== agent.id);
       const role: SessionRole = prev.length === 0 ? "Requester" : "Contributor";
       return [...prev, { agent, role }];
     });
@@ -40,15 +40,15 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
 
   function changeRole(agentId: string, role: SessionRole) {
     setSessionAgents((prev) =>
-      prev.map((sa) => (sa.agent.agent_id === agentId ? { ...sa, role } : sa))
+      prev.map((sa) => (sa.agent.id === agentId ? { ...sa, role } : sa))
     );
   }
 
   function removeAgent(agentId: string) {
-    setSessionAgents((prev) => prev.filter((sa) => sa.agent.agent_id !== agentId));
+    setSessionAgents((prev) => prev.filter((sa) => sa.agent.id !== agentId));
   }
 
-  const selectedIds = new Set(sessionAgents.map((sa) => sa.agent.agent_id));
+  const selectedIds = new Set(sessionAgents.map((sa) => sa.agent.id));
 
   return (
     <div className="min-h-screen bg-al-bg text-al-text flex flex-col">
@@ -166,9 +166,9 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {filtered.map((agent) => (
                 <AgentCard
-                  key={agent.agent_id}
+                  key={agent.id}
                   agent={agent}
-                  selected={selectedIds.has(agent.agent_id)}
+                  selected={selectedIds.has(agent.id)}
                   onToggle={toggleAgent}
                   searchSkill={searchSkill}
                 />

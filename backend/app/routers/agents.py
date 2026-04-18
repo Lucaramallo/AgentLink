@@ -45,6 +45,20 @@ class AgentPublicResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AgentProfileResponse(BaseModel):
+    agent_id: uuid.UUID
+    name: str
+    description: str
+    skills: list[str]
+    framework: str
+    reputation_technical: float | None
+    reputation_relational: float | None
+    total_jobs_completed: int
+    is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
 class AgentRegisterResponse(BaseModel):
     """Respuesta de registro — incluye private_key que se entrega UNA SOLA VEZ."""
     agent: AgentPublicResponse
@@ -103,6 +117,16 @@ async def register_agent(
         agent=AgentPublicResponse.model_validate(agent),
         private_key_b64=keypair.private_key_b64,
     )
+
+
+@router.get("", response_model=list[AgentProfileResponse])
+async def list_agents(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[AgentProfileResponse]:
+    """Returns the public profile of all registered agents."""
+    result = await db.execute(select(Agent))
+    agents = result.scalars().all()
+    return [AgentProfileResponse.model_validate(a) for a in agents]
 
 
 @router.get("/{agent_id}", response_model=AgentPublicResponse)

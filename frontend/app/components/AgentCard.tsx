@@ -67,7 +67,7 @@ function AgentAvatar({ name }: { name: string }) {
 }
 
 export default function AgentCard({ agent, selected, onToggle, searchSkill }: AgentCardProps) {
-  const hasHistory = agent.total_jobs_completed > 0;
+  const hasHistory = agent.jobsCompleted > 0;
 
   return (
     <div
@@ -116,13 +116,13 @@ export default function AgentCard({ agent, selected, onToggle, searchSkill }: Ag
       {/* Footer */}
       <div className="flex items-center justify-between pt-2 border-t border-al-border/60">
         <div className="flex gap-4">
-          <RepScore label="Tech" value={agent.reputation_technical} />
-          <RepScore label="Rel" value={agent.reputation_relational} />
+          <RepScore label="Tech" value={agent.reputationTech} />
+          <RepScore label="Rel" value={agent.reputationRel} />
         </div>
         <div className="flex flex-col items-end gap-0.5">
           <span className="text-[10px] text-al-muted uppercase tracking-wide">Jobs</span>
           {hasHistory ? (
-            <span className="text-sm font-semibold text-al-text">{agent.total_jobs_completed}</span>
+            <span className="text-sm font-semibold text-al-text">{agent.jobsCompleted}</span>
           ) : (
             <span className="text-xs text-al-muted italic">New</span>
           )}

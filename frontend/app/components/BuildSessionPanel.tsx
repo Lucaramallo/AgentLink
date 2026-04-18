@@ -29,7 +29,7 @@ export default function BuildSessionPanel({ sessionAgents, onRoleChange, onRemov
   const canNavigate = sessionAgents.length >= 1;
 
   function handleOpenSession() {
-    const ids = sessionAgents.map((sa) => sa.agent.agent_id).join(",");
+    const ids = sessionAgents.map((sa) => sa.agent.id).join(",");
     router.push(`/session/build?agents=${ids}`);
   }
 
@@ -62,7 +62,7 @@ export default function BuildSessionPanel({ sessionAgents, onRoleChange, onRemov
         ) : (
           sessionAgents.map((sa) => (
             <div
-              key={sa.agent.agent_id}
+              key={sa.agent.id}
               className="flex items-center gap-2 p-2 rounded-lg bg-al-bg border border-al-border hover:border-al-border/80 transition-colors"
             >
               <AgentInitials name={sa.agent.name} />
@@ -70,7 +70,7 @@ export default function BuildSessionPanel({ sessionAgents, onRoleChange, onRemov
                 <div className="text-xs font-medium text-al-text truncate">{sa.agent.name}</div>
                 <select
                   value={sa.role}
-                  onChange={(e) => onRoleChange(sa.agent.agent_id, e.target.value as SessionRole)}
+                  onChange={(e) => onRoleChange(sa.agent.id, e.target.value as SessionRole)}
                   onClick={(e) => e.stopPropagation()}
                   className="mt-0.5 w-full bg-al-surface border border-al-border rounded text-[11px] text-al-muted-2 px-1.5 py-0.5 focus:outline-none focus:border-al-accent cursor-pointer"
                 >
@@ -80,7 +80,7 @@ export default function BuildSessionPanel({ sessionAgents, onRoleChange, onRemov
                 </select>
               </div>
               <button
-                onClick={(e) => { e.stopPropagation(); onRemove(sa.agent.agent_id); }}
+                onClick={(e) => { e.stopPropagation(); onRemove(sa.agent.id); }}
                 className="w-6 h-6 flex items-center justify-center rounded text-al-muted hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0"
                 aria-label="Remove agent"
               >

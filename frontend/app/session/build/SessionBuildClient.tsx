@@ -1,10 +1,20 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Agent, SessionRole } from "../../lib/types";
-import { MOCK_AGENTS } from "../../lib/api";
+import { fetchAgents } from "../../lib/api";
+
+const API_BASE = "http://192.168.0.113:8000/api/v1";
+const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
+const OWNER_B = "7059dca2-afe8-4908-9e69-b2451b0be356";
+
+function parseTimeoutHours(s: string): number {
+  if (s === "1 week") return 168;
+  const m = s.match(/(\d+)/);
+  return m ? parseInt(m[1]) : 48;
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -29,15 +39,15 @@ const AL_RULES = [
 // ── Human stub ────────────────────────────────────────────────────────────
 
 const HUMAN_STUB: Agent = {
-  agent_id: "human-owner",
+  id: "human-owner",
   name: "YOU",
   description: "Human owner",
   skills: [],
   framework: "Human",
   public_key: "",
-  reputation_technical: null,
-  reputation_relational: null,
-  total_jobs_completed: 0,
+  reputationTech: null,
+  reputationRel: null,
+  jobsCompleted: 0,
   total_jobs_disputed: 0,
   is_active: true,
 };
@@ -114,6 +124,7 @@ function rrect(
 
 export default function SessionBuildClient() {
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // Canvas refs
   const containerRef = useRef<HTMLDivElement>(null);
@@ -158,6 +169,10 @@ export default function SessionBuildClient() {
   const [customClauses, setCustomClauses] = useState<CustomClause[]>([]);
   const [rulesExpanded, setRulesExpanded] = useState(false);
 
+  // Open session
+  const [openLoading, setOpenLoading] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
+
   // Keep refs in sync with state
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { connsRef.current = conns; }, [conns]);
@@ -169,16 +184,20 @@ export default function SessionBuildClient() {
   // Stable session ID (generated once per mount)
   const sessionIdRef = useRef(`AL-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
 
+  // Agent list (fetched from backend)
+  const [allAgents, setAllAgents] = useState<Agent[]>([]);
+  useEffect(() => { fetchAgents().then(setAllAgents); }, []);
+
   // ── Init from URL params ─────────────────────────────────────────────────
 
   useEffect(() => {
     const raw = searchParams.get("agents");
     const agentIds = raw ? raw.split(",").filter(Boolean) : [];
-    if (agentIds.length === 0) return;
+    if (agentIds.length === 0 || allAgents.length === 0) return;
 
     const initial: CanvasNode[] = [];
     agentIds.forEach((id, i) => {
-      const agent = MOCK_AGENTS.find((a) => a.agent_id === id);
+      const agent = allAgents.find((a) => a.id === id);
       if (!agent) return;
       const angle = (i / agentIds.length) * 2 * Math.PI - Math.PI / 2;
       const r = agentIds.length === 1 ? 0 : 160;
@@ -191,7 +210,7 @@ export default function SessionBuildClient() {
       });
     });
     setNodes(initial);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allAgents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Canvas resize ────────────────────────────────────────────────────────
 
@@ -556,7 +575,7 @@ export default function SessionBuildClient() {
   // ── Agent picker ─────────────────────────────────────────────────────────
 
   function addAgent(agent: Agent) {
-    const already = nodesRef.current.find((n) => n.agent.agent_id === agent.agent_id);
+    const already = nodesRef.current.find((n) => n.agent.id === agent.id);
     if (already) return;
     const margin = 120 / zoomRef.current;
     const worldXMin = -panRef.current.x / zoomRef.current + margin;
@@ -567,7 +586,7 @@ export default function SessionBuildClient() {
     const y = worldYMin + Math.random() * Math.max(1, worldYMax - worldYMin);
     setNodes((prev) => [
       ...prev,
-      { id: `node-${agent.agent_id}-${Date.now()}`, x, y, agent, role: "Contributor" },
+      { id: `node-${agent.id}-${Date.now()}`, x, y, agent, role: "Contributor" },
     ]);
     setShowPicker(false);
     setPickerSearch("");
@@ -621,6 +640,68 @@ export default function SessionBuildClient() {
     setPan({ x: newPanX, y: newPanY });
   }
 
+  // ── Open Session ─────────────────────────────────────────────────────────
+
+  async function openSession() {
+    setOpenLoading(true);
+    setOpenError(null);
+    try {
+      const nonHumanNodes = nodes.filter((n) => n.agent.id !== "human-owner");
+      const agentANode = nonHumanNodes[0];
+      const agentBNode = nonHumanNodes[1];
+
+      if (!agentANode || !agentBNode) {
+        setOpenError("Please add at least 2 AI agents to the session");
+        setOpenLoading(false);
+        return;
+      }
+
+      const agentAId = agentANode.agent.id;
+      const agentBId = agentBNode.agent.id;
+
+      const contractRes = await fetch(`${API_BASE}/rooms/contracts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_description: task,
+          deliverable_spec: criteria,
+          agent_a_id: agentAId,
+          agent_b_id: agentBId,
+          max_revision_rounds: maxRevisions,
+          timeout_hours: parseTimeoutHours(sessionTimeout),
+        }),
+      });
+      if (!contractRes.ok) throw new Error(`Failed to create contract (${contractRes.status})`);
+      const { contract_id } = await contractRes.json();
+
+      const signA = await fetch(`${API_BASE}/rooms/contracts/${contract_id}/sign?side=a`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner_id: OWNER_A }),
+      });
+      if (!signA.ok) throw new Error(`Failed to sign contract side A (${signA.status})`);
+
+      const signB = await fetch(`${API_BASE}/rooms/contracts/${contract_id}/sign?side=b`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner_id: OWNER_B }),
+      });
+      if (!signB.ok) throw new Error(`Failed to sign contract side B (${signB.status})`);
+
+      const roomRes = await fetch(
+        `${API_BASE}/rooms?contract_id=${contract_id}&agent_a_id=${agentAId}&agent_b_id=${agentBId}`,
+        { method: "POST" },
+      );
+      if (!roomRes.ok) throw new Error(`Failed to open room (${roomRes.status})`);
+      const { room_id } = await roomRes.json();
+
+      router.push(`/session/${room_id}`);
+    } catch (err) {
+      setOpenError(err instanceof Error ? err.message : "Unexpected error");
+      setOpenLoading(false);
+    }
+  }
+
   // ── Cursor ───────────────────────────────────────────────────────────────
 
   let cursor = "default";
@@ -632,8 +713,8 @@ export default function SessionBuildClient() {
 
   // ── Picker agents ────────────────────────────────────────────────────────
 
-  const pickerAgents = MOCK_AGENTS.filter((a) => {
-    if (nodes.some((n) => n.agent.agent_id === a.agent_id)) return false;
+  const pickerAgents = allAgents.filter((a) => {
+    if (nodes.some((n) => n.agent.id === a.id)) return false;
     if (!pickerSearch) return true;
     const q = pickerSearch.toLowerCase();
     return (
@@ -676,15 +757,22 @@ export default function SessionBuildClient() {
             Directory
           </Link>
           <button
-            disabled={!canOpen}
+            disabled={!canOpen || openLoading}
+            onClick={openSession}
             className={`
-              px-4 py-1.5 rounded-lg text-sm font-semibold transition-all duration-150
-              ${canOpen
+              px-4 py-1.5 rounded-lg text-sm font-semibold transition-all duration-150 flex items-center gap-2
+              ${canOpen && !openLoading
                 ? "bg-al-accent text-al-bg hover:bg-al-accent-dim active:scale-[0.98]"
                 : "bg-al-surface border border-al-border text-al-muted cursor-not-allowed"
               }
             `}
           >
+            {openLoading && (
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 16 16">
+                <circle className="opacity-25" cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
+                <path className="opacity-75" fill="currentColor" d="M14 8a6 6 0 0 0-6-6V0a8 8 0 0 1 8 8h-2z" />
+              </svg>
+            )}
             Open Session
           </button>
         </div>
@@ -880,14 +968,14 @@ export default function SessionBuildClient() {
                 <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-0.5">
                   {pickerAgents.length === 0 ? (
                     <p className="text-xs text-al-muted text-center py-8">
-                      {MOCK_AGENTS.every((a) => nodes.some((n) => n.agent.agent_id === a.agent_id))
+                      {allAgents.every((a) => nodes.some((n) => n.agent.id === a.id))
                         ? "All agents are already on the canvas"
                         : "No agents match your search"}
                     </p>
                   ) : (
                     pickerAgents.map((agent) => (
                       <button
-                        key={agent.agent_id}
+                        key={agent.id}
                         onClick={() => addAgent(agent)}
                         className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-al-bg transition-colors text-left"
                       >
@@ -1093,18 +1181,25 @@ export default function SessionBuildClient() {
           {/* Open Session */}
           <div className="px-4 py-4 border-t border-al-border flex-shrink-0">
             <button
-              disabled={!canOpen}
+              disabled={!canOpen || openLoading}
+              onClick={openSession}
               className={`
-                w-full py-2.5 rounded-xl text-sm font-semibold transition-all duration-150
-                ${canOpen
+                w-full py-2.5 rounded-xl text-sm font-semibold transition-all duration-150 flex items-center justify-center gap-2
+                ${canOpen && !openLoading
                   ? "bg-al-accent text-al-bg hover:bg-al-accent-dim active:scale-[0.98] shadow-[0_0_20px_theme(colors.al-accent/25)]"
                   : "bg-al-bg border border-al-border text-al-muted cursor-not-allowed"
                 }
               `}
             >
-              Open Session
+              {openLoading && (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 16 16">
+                  <circle className="opacity-25" cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
+                  <path className="opacity-75" fill="currentColor" d="M14 8a6 6 0 0 0-6-6V0a8 8 0 0 1 8 8h-2z" />
+                </svg>
+              )}
+              {openLoading ? "Opening…" : "Open Session"}
             </button>
-            {!canOpen && (
+            {!canOpen && !openLoading && (
               <p className="text-[11px] text-al-muted text-center mt-1.5">
                 Add two participants to start a session
               </p>
@@ -1112,6 +1207,24 @@ export default function SessionBuildClient() {
           </div>
         </aside>
       </div>
+
+      {/* Error toast */}
+      {openError && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-red-950 border border-red-500/40 text-red-300 text-sm rounded-xl px-4 py-3 shadow-2xl max-w-md">
+          <svg className="w-4 h-4 flex-shrink-0 text-red-400" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+            <path strokeLinecap="round" strokeWidth={1.5} d="M8 5v4m0 2.5h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0z" />
+          </svg>
+          <span className="flex-1">{openError}</span>
+          <button
+            onClick={() => setOpenError(null)}
+            className="w-5 h-5 flex items-center justify-center rounded text-red-400 hover:text-red-200 transition-colors flex-shrink-0"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 14 14" stroke="currentColor">
+              <path strokeLinecap="round" strokeWidth={1.5} d="M2 2l10 10M12 2L2 12" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
