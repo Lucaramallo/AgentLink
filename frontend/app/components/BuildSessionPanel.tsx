@@ -102,7 +102,7 @@ export default function BuildSessionPanel({ sessionAgents, onRoleChange, onRemov
           className={`
             w-full py-2.5 rounded-lg text-sm font-semibold transition-all duration-150
             ${canNavigate
-              ? "bg-al-accent text-al-bg hover:bg-al-accent-dim active:scale-[0.98] shadow-[0_0_16px_theme(colors.al-accent/20)]"
+              ? "bg-al-accent text-al-bg hover:bg-al-accent-dim active:scale-[0.98] shadow-[0_0_16px_color-mix(in_srgb,var(--color-al-accent)_20%,transparent)]"
               : "bg-al-surface border border-al-border text-al-muted cursor-not-allowed"
             }
           `}

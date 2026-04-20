@@ -190,6 +190,12 @@ export default function SessionRoomClient() {
   const [isMock, setIsMock] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Demo agent integration
+  const [demoLimitReached, setDemoLimitReached] = useState(false);
+  const [messagesRemaining, setMessagesRemaining] = useState<number | null>(null);
+  const graphNodesRef = useRef<GraphNode[]>(MOCK_GRAPH_NODES);
+  const callDemoRef = useRef<(msg: string, msgs: Message[]) => void>(() => {});
+
   // ── Canvas resize ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -340,6 +346,10 @@ export default function SessionRoomClient() {
     if (messages.some((m) => m.type === "DELIVERABLE")) setHasDeliverable(true);
   }, [messages]);
 
+  // ── Sync graphNodesRef ───────────────────────────────────────────────────
+
+  useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
+
   // ── WebSocket / mock fallback ────────────────────────────────────────────
 
   useEffect(() => {
@@ -395,6 +405,7 @@ export default function SessionRoomClient() {
             setGraphEdges(edges);
           }
           if (init?.participant_count) setParticipantCount(init.participant_count);
+          callDemoRef.current("", []);
         } else if (data.type === "message") {
           setMessages((prev) => [...prev, data.data as Message]);
         } else if (data.type === "status_update") {
@@ -420,6 +431,51 @@ export default function SessionRoomClient() {
     };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Demo agent integration ───────────────────────────────────────────────
+
+  async function callDemoAgents(lastMessage: string, sessionMessages: Message[]) {
+    const agents = graphNodesRef.current.filter((n) => !n.isHuman);
+    for (const agent of agents) {
+      try {
+        const res = await fetch("http://192.168.0.113:8000/api/v1/demo/respond", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room_id: sessionId,
+            message: lastMessage,
+            agent_id: agent.label.toLowerCase(),
+            session_messages: sessionMessages,
+          }),
+        });
+        if (res.status === 429) {
+          const body = await res.json().catch(() => ({}));
+          if (body.error === "demo_limit_reached") setDemoLimitReached(true);
+          return;
+        }
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data.messages_remaining != null) setMessagesRemaining(data.messages_remaining);
+        const content: string = data.message ?? data.content ?? data.response ?? "";
+        if (!content) continue;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `demo-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            agentId: agent.id,
+            agentName: agent.label,
+            agentOrg: "",
+            role: agent.role,
+            type: "TASK" as MessageType,
+            content,
+            sigValid: true,
+            ts: new Date().toISOString(),
+          },
+        ]);
+      } catch { /* network error — skip */ }
+    }
+  }
+  callDemoRef.current = callDemoAgents;
+
   // ── Handlers ─────────────────────────────────────────────────────────────
 
   function sendMessage() {
@@ -437,11 +493,13 @@ export default function SessionRoomClient() {
       ts: new Date().toISOString(),
       isHuman: true,
     };
-    setMessages((prev) => [...prev, msg]);
+    const updatedMessages = [...messages, msg];
+    setMessages(updatedMessages);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "message", data: msg }));
     }
     setInputText("");
+    callDemoRef.current(text, updatedMessages);
   }
 
   function handleConforme() {
@@ -504,6 +562,32 @@ export default function SessionRoomClient() {
           </div>
         </div>
       </header>
+
+      {/* Demo limit banner */}
+      {demoLimitReached && (
+        <div className="shrink-0 flex items-center justify-between gap-4 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/30">
+          <span className="text-sm text-amber-400">
+            You&apos;ve reached the demo limit. Register your own agent to continue using AgentLink.
+          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            <Link
+              href="/directory"
+              className="text-sm font-semibold text-amber-400 hover:text-amber-300 underline transition-colors whitespace-nowrap"
+            >
+              Register Agent
+            </Link>
+            <button
+              onClick={() => setDemoLimitReached(false)}
+              className="text-al-muted hover:text-al-text transition-colors"
+              aria-label="Dismiss"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                <path strokeLinecap="round" strokeWidth={1.5} d="M3 3l10 10M13 3L3 13" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex flex-1 min-h-0">
@@ -570,6 +654,13 @@ export default function SessionRoomClient() {
           {/* Input */}
           {!isClosed && (
             <div className="shrink-0 border-t border-al-border bg-al-surface px-4 py-3">
+              {messagesRemaining != null && (
+                <div className="flex justify-end mb-1.5">
+                  <span className="text-[10px] text-al-muted tabular-nums">
+                    {messagesRemaining} demo message{messagesRemaining === 1 ? "" : "s"} remaining
+                  </span>
+                </div>
+              )}
               <div className="flex gap-2">
                 <select
                   value={inputType}

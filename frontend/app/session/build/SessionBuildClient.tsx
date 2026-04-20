@@ -220,7 +220,7 @@ export default function SessionBuildClient() {
     const obs = new ResizeObserver((entries) => {
       const e = entries[0];
       setCanvasW(e.contentRect.width);
-      setCanvasH(e.contentRect.height);
+      setCanvasH(Math.max(0, e.contentRect.height - 50));
     });
     obs.observe(container);
     return () => obs.disconnect();
@@ -461,7 +461,7 @@ export default function SessionBuildClient() {
 
   // ── Mouse handlers ───────────────────────────────────────────────────────
 
-  function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+  function handleMouseDown(e: React.MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
 
     if (contextMenu) {
@@ -516,7 +516,7 @@ export default function SessionBuildClient() {
     }
   }
 
-  function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+  function handleMouseMove(e: React.MouseEvent<HTMLDivElement>) {
     const pos = getPos(e);
 
     if (draggingRef.current) {
@@ -547,7 +547,7 @@ export default function SessionBuildClient() {
     draggingRef.current = null;
   }
 
-  function handleContextMenu(e: React.MouseEvent<HTMLCanvasElement>) {
+  function handleContextMenu(e: React.MouseEvent<HTMLDivElement>) {
     e.preventDefault();
     const pos = getPos(e);
     const node = nodeAt(pos.x, pos.y);
@@ -611,11 +611,11 @@ export default function SessionBuildClient() {
 
   // Non-passive wheel handler so we can call e.preventDefault()
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = containerRef.current;
     if (!canvas) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const r = canvas.getBoundingClientRect();
+      const r = canvasRef.current!.getBoundingClientRect();
       const sx = e.clientX - r.left;
       const sy = e.clientY - r.top;
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -743,7 +743,7 @@ export default function SessionBuildClient() {
   const canOpen = nodes.length >= 2;
 
   return (
-    <div className="min-h-screen flex flex-col bg-al-bg text-al-text">
+    <div className="h-screen flex flex-col overflow-hidden bg-al-bg text-al-text">
       {/* Navbar */}
       <header className="sticky top-0 z-30 bg-al-bg/90 backdrop-blur border-b border-al-border">
         <div className="max-w-screen-2xl mx-auto px-6 h-14 flex items-center justify-between">
@@ -793,15 +793,19 @@ export default function SessionBuildClient() {
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
         {/* ── Canvas area ── */}
-        <div className="flex-1 relative overflow-hidden" ref={containerRef}>
+        <div
+          className="flex-1 relative overflow-hidden"
+          ref={containerRef}
+          style={{ cursor }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onContextMenu={handleContextMenu}
+        >
           <canvas
             ref={canvasRef}
-            style={{ cursor, display: "block" }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onContextMenu={handleContextMenu}
+            style={{ display: "block", pointerEvents: "none" }}
           />
 
           {/* Empty state */}
@@ -827,8 +831,8 @@ export default function SessionBuildClient() {
             </div>
           )}
 
-          {/* + Add agent */}
-          <div className="absolute bottom-5 left-5 flex items-center gap-2">
+          {/* Bottom bar: add controls + zoom */}
+          <div className="absolute bottom-2 left-2 flex items-center gap-2 z-10">
             <button
               onClick={() => setShowPicker(true)}
               className="flex items-center gap-2 px-3.5 py-2 bg-al-surface border border-al-border rounded-xl text-sm text-al-text hover:border-al-accent/60 hover:text-al-accent transition-all shadow-lg"
@@ -853,6 +857,25 @@ export default function SessionBuildClient() {
               </svg>
               Add me as human
             </button>
+            <div className="ml-2 flex items-center gap-0.5 bg-al-surface border border-al-border rounded-xl shadow-lg px-1.5 py-1">
+              <button
+                onClick={() => zoomBy(1 / 1.2)}
+                aria-label="Zoom out"
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-al-muted hover:text-al-text hover:bg-al-border/40 transition-colors text-base leading-none select-none"
+              >
+                −
+              </button>
+              <span className="text-[11px] text-al-muted tabular-nums w-10 text-center font-mono select-none">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                onClick={() => zoomBy(1.2)}
+                aria-label="Zoom in"
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-al-muted hover:text-al-text hover:bg-al-border/40 transition-colors text-base leading-none select-none"
+              >
+                +
+              </button>
+            </div>
           </div>
 
           {/* Context menu */}
@@ -913,27 +936,6 @@ export default function SessionBuildClient() {
               </div>
             );
           })()}
-
-          {/* Zoom controls */}
-          <div className="absolute bottom-5 right-5 flex items-center gap-0.5 bg-al-surface border border-al-border rounded-xl shadow-lg px-1.5 py-1 z-10">
-            <button
-              onClick={() => zoomBy(1 / 1.2)}
-              aria-label="Zoom out"
-              className="w-7 h-7 flex items-center justify-center rounded-lg text-al-muted hover:text-al-text hover:bg-al-border/40 transition-colors text-base leading-none select-none"
-            >
-              −
-            </button>
-            <span className="text-[11px] text-al-muted tabular-nums w-10 text-center font-mono select-none">
-              {Math.round(zoom * 100)}%
-            </span>
-            <button
-              onClick={() => zoomBy(1.2)}
-              aria-label="Zoom in"
-              className="w-7 h-7 flex items-center justify-center rounded-lg text-al-muted hover:text-al-text hover:bg-al-border/40 transition-colors text-base leading-none select-none"
-            >
-              +
-            </button>
-          </div>
 
           {/* Agent picker modal */}
           {showPicker && (
