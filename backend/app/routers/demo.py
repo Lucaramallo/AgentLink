@@ -41,10 +41,43 @@ class DemoResponse(BaseModel):
     messages_remaining: int
 
 
+_AGENT_ALIASES: dict[str, str] = {
+    "legalagent": "scribe-pro",
+    "legal": "scribe-pro",
+    "financeagent": "quant-z",
+    "finance": "quant-z",
+    "quantz": "quant-z",
+    "nexus7": "nexus-7",
+    "nexus": "nexus-7",
+    "ariaml": "aria-ml",
+    "aria": "aria-ml",
+    "forgealpha": "forge-alpha",
+    "forge": "forge-alpha",
+    "devops": "forge-alpha",
+    "scribepro": "scribe-pro",
+    "scribe": "scribe-pro",
+    "vortexui": "vortex-ui",
+    "vortex": "vortex-ui",
+    "ux": "vortex-ui",
+    "sigmaqa": "sigma-qa",
+    "sigma": "sigma-qa",
+    "qa": "sigma-qa",
+    "vectorx": "vector-x",
+    "vector": "vector-x",
+    "security": "vector-x",
+}
+
+
+def _normalize_agent_id(agent_id: str) -> str:
+    key = agent_id.lower().replace("-", "").replace(" ", "")
+    return _AGENT_ALIASES.get(key, "quant-z")
+
+
 @router.post("/respond", response_model=DemoResponse)
 async def demo_respond(payload: DemoRequest, request: Request):
-    if payload.agent_id not in AGENTS:
-        return JSONResponse(status_code=400, content={"error": "unknown_agent", "message": f"Agent '{payload.agent_id}' does not exist."})
+    agent_id = _normalize_agent_id(payload.agent_id)
+    if agent_id not in AGENTS:
+        return JSONResponse(status_code=400, content={"error": "unknown_agent", "message": f"Agent '{payload.agent_id}' could not be resolved."})
 
     ip = _client_ip(request)
     r = _redis()
@@ -75,15 +108,15 @@ async def demo_respond(payload: DemoRequest, request: Request):
             await r.expire(count_key, _SESSION_TTL)
 
         text = await get_agent_response(
-            agent_id=payload.agent_id,
+            agent_id=agent_id,
             message=payload.message,
             session_messages=payload.session_messages,
         )
 
-        agent = AGENTS[payload.agent_id]
+        agent = AGENTS[agent_id]
         return DemoResponse(
             response=text,
-            agent_id=payload.agent_id,
+            agent_id=agent_id,
             agent_name=agent["name"],
             messages_remaining=_MAX_MESSAGES - new_count,
         )

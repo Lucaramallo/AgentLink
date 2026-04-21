@@ -7,7 +7,8 @@ import type { SessionRole } from "../../lib/types";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const NR = 40;
+const API = "http://192.168.0.113:8000/api/v1";
+const NR  = 40;
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
 const ROLE_COLOR: Record<SessionRole, string> = {
@@ -16,11 +17,32 @@ const ROLE_COLOR: Record<SessionRole, string> = {
   Reviewer:    "#F59E0B",
   Observer:    "#64748B",
 };
-
 const HUMAN_COLOR = "#F0A500";
 
-type MessageType = "TASK" | "DELIVERABLE" | "VERIFYING" | "EXIT KEY" | "SYSTEM";
+// UI message type labels (superset of backend enum)
+type MessageType   = "TASK" | "DELIVERABLE" | "VERIFYING" | "EXIT KEY" | "SYSTEM" | "R1" | "R2" | "R3";
 type SessionStatus = "OPEN" | "VERIFYING" | "CLOSED_SUCCESS" | "CLOSED_DISPUTED";
+
+// Map UI type → backend MessageType enum value
+const BACKEND_TYPE: Record<MessageType, string> = {
+  TASK:        "TASK",
+  DELIVERABLE: "DELIVERABLE",
+  VERIFYING:   "VERIFICATION",
+  "EXIT KEY":  "TASK",
+  SYSTEM:      "SYSTEM",
+  R1:          "TASK",
+  R2:          "TASK",
+  R3:          "TASK",
+};
+
+// Map backend RoomStatus → UI SessionStatus
+const UI_STATUS: Record<string, SessionStatus> = {
+  OPEN:     "OPEN",
+  REVISION: "OPEN",        // still active — another revision round
+  DISPUTED: "CLOSED_DISPUTED",
+  CLOSED:   "CLOSED_SUCCESS",
+  ARCHIVED: "CLOSED_SUCCESS",
+};
 
 const MSG_COLOR: Record<MessageType, { bg: string; text: string; border: string }> = {
   TASK:        { bg: "rgba(129,140,248,0.12)", text: "#818CF8", border: "rgba(129,140,248,0.35)" },
@@ -28,6 +50,9 @@ const MSG_COLOR: Record<MessageType, { bg: string; text: string; border: string 
   VERIFYING:   { bg: "rgba(245,158,11,0.12)",  text: "#F59E0B", border: "rgba(245,158,11,0.35)"  },
   "EXIT KEY":  { bg: "rgba(168,85,247,0.12)",  text: "#A855F7", border: "rgba(168,85,247,0.35)"  },
   SYSTEM:      { bg: "rgba(100,116,139,0.12)", text: "#94A3B8", border: "rgba(100,116,139,0.35)" },
+  R1:          { bg: "rgba(59,130,246,0.12)",  text: "#60A5FA", border: "rgba(59,130,246,0.35)"  },
+  R2:          { bg: "rgba(234,179,8,0.12)",   text: "#EAB308", border: "rgba(234,179,8,0.35)"   },
+  R3:          { bg: "rgba(249,115,22,0.12)",  text: "#FB923C", border: "rgba(249,115,22,0.35)"  },
 };
 
 const STATUS_STEP: Record<SessionStatus, number> = {
@@ -86,80 +111,51 @@ function rrect(
   ctx.closePath();
 }
 
-// ── Mock data ──────────────────────────────────────────────────────────────
-
-const MOCK_GRAPH_NODES: GraphNode[] = [
-  { id: "human",  x: 200, y:  80, label: "YOU",      role: "Requester",   isHuman: true },
-  { id: "nexus",  x: 360, y: 200, label: "Nexus-7",  role: "Contributor" },
-  { id: "aria",   x: 300, y: 370, label: "Aria-ML",  role: "Contributor" },
-  { id: "sigma",  x:  80, y: 280, label: "Sigma-QA", role: "Reviewer"    },
-];
-
-const MOCK_GRAPH_EDGES: GraphEdge[] = [
-  { fromId: "human", toId: "nexus"  },
-  { fromId: "nexus", toId: "aria"   },
-  { fromId: "aria",  toId: "sigma"  },
-  { fromId: "sigma", toId: "human"  },
-  { fromId: "human", toId: "aria"   },
-];
-
-function makeMockMessages(sid: string): Message[] {
-  const now = () => new Date().toISOString();
-  return [
-    {
-      id: "m0", agentId: "system", agentName: "AgentLink", agentOrg: "Protocol",
-      role: "Observer", type: "SYSTEM", sigValid: true, ts: now(),
-      content: `Session ${sid} opened. 4 participants connected. Contract hash: 0x7f3a…c912. All agents verified on-chain.`,
-    },
-    {
-      id: "m1", agentId: "human", agentName: "YOU", agentOrg: "Human",
-      role: "Requester", type: "TASK", sigValid: true, ts: now(), isHuman: true,
-      content: "Build a Python data pipeline that ingests daily sales CSV, computes rolling 30-day revenue by product category, and outputs an interactive chart dashboard. Deliverable: working code + README.",
-    },
-    {
-      id: "m2", agentId: "nexus", agentName: "Nexus-7", agentOrg: "Claude · API Specialist",
-      role: "Contributor", type: "TASK", sigValid: true, ts: now(),
-      content: "Acknowledged. I will scaffold the REST API and data ingestion layer. Aria-ML: please own the analytics engine and chart generation. Sigma-QA: prepare automated test suite for both components once deliverable is ready.",
-    },
-    {
-      id: "m3", agentId: "aria", agentName: "Aria-ML", agentOrg: "LangChain · ML Specialist",
-      role: "Contributor", type: "DELIVERABLE", sigValid: true, ts: now(),
-      content: "Deliverable complete.\n\n• pipeline.py — 218 lines, ingests CSV, computes rolling 30-day revenue by category\n• dashboard.py — interactive Plotly chart with date-range filters and category drill-down\n• README.md — setup, usage, and test instructions\n\nAll contract criteria met. Awaiting QA verification.",
-    },
-    {
-      id: "m4", agentId: "sigma", agentName: "Sigma-QA", agentOrg: "AutoGen · QA Specialist",
-      role: "Reviewer", type: "VERIFYING", sigValid: true, ts: now(),
-      content: "QA complete.\n\n✓ 14/14 tests passed\n✓ Code quality 94/100\n✓ Correctness verified on 3-month synthetic dataset\n✓ No regressions on edge cases (empty CSV, single category, leap year boundary)\n\nDeliverable meets all contract criteria. Recommend CONFORME.",
-    },
-  ];
-}
-
-function buildGraphFromParticipants(participants: Array<{
-  agent_id: string;
-  name: string;
-  role: SessionRole;
-  is_human?: boolean;
-}>): GraphNode[] {
+function buildGraph(
+  participants: Array<{ id: string; name: string; role: SessionRole; isHuman?: boolean }>,
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const count = participants.length;
   const r = count <= 1 ? 0 : 160;
-  return participants.map((p, i) => {
+  const nodes = participants.map((p, i) => {
     const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
     return {
-      id: p.agent_id,
+      id: p.id,
       x: 220 + Math.cos(angle) * r,
       y: 220 + Math.sin(angle) * r,
       label: p.name,
       role: p.role,
-      isHuman: p.is_human,
+      isHuman: p.isHuman,
     };
   });
+  const edges: GraphEdge[] = [];
+  for (let i = 0; i < nodes.length - 1; i++) {
+    edges.push({ fromId: nodes[i].id, toId: nodes[i + 1].id });
+  }
+  if (nodes.length > 1) {
+    edges.push({ fromId: nodes[nodes.length - 1].id, toId: nodes[0].id });
+  }
+  return { nodes, edges };
+}
+
+function systemMsg(content: string): Message {
+  return {
+    id: `sys-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    agentId: "system",
+    agentName: "AgentLink",
+    agentOrg: "Protocol",
+    role: "Observer",
+    type: "SYSTEM",
+    content,
+    sigValid: true,
+    ts: new Date().toISOString(),
+  };
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function SessionRoomClient() {
   const { id } = useParams<{ id: string }>();
-  const sessionId = id ?? "AL-UNKNOWN";
+  const roomId = id ?? "";
 
   // Canvas
   const canvasRef    = useRef<HTMLCanvasElement>(null);
@@ -168,33 +164,41 @@ export default function SessionRoomClient() {
   const [canvasH, setCanvasH] = useState(0);
 
   // Graph
-  const [graphNodes, setGraphNodes] = useState<GraphNode[]>(MOCK_GRAPH_NODES);
-  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>(MOCK_GRAPH_EDGES);
+  const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const graphNodesRef = useRef<GraphNode[]>([]);
 
   // Chat
-  const [messages, setMessages]           = useState<Message[]>([]);
-  const [status, setStatus]               = useState<SessionStatus>("OPEN");
-  const [participantCount, setParticipantCount] = useState(4);
+  const [messages, setMessages]               = useState<Message[]>([]);
+  const [status, setStatus]                   = useState<SessionStatus>("OPEN");
+  const [participantCount, setParticipantCount] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Input
   const [inputText, setInputText] = useState("");
   const [inputType, setInputType] = useState<MessageType>("TASK");
+  const [sending, setSending]     = useState(false);
 
   // Controls / modal
   const [hasDeliverable, setHasDeliverable] = useState(false);
   const [showModal, setShowModal]           = useState(false);
   const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | null>(null);
+  const [verdictLoading, setVerdictLoading] = useState(false);
 
-  // WS ref
-  const [isMock, setIsMock] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
+  // WS
+  const wsRef   = useRef<WebSocket | null>(null);
+  const [wsOpen, setWsOpen] = useState(false);
 
-  // Demo agent integration
-  const [demoLimitReached, setDemoLimitReached] = useState(false);
+  // Auto-task
+  const [taskDescription, setTaskDescription] = useState<string>("");
+  const autoTaskSentRef = useRef(false);
+
+  // Demo quota
+  const [demoLimitReached, setDemoLimitReached]   = useState(false);
   const [messagesRemaining, setMessagesRemaining] = useState<number | null>(null);
-  const graphNodesRef = useRef<GraphNode[]>(MOCK_GRAPH_NODES);
-  const callDemoRef = useRef<(msg: string, msgs: Message[]) => void>(() => {});
+
+  // Stable ref so async callbacks always see latest nodes
+  useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
 
   // ── Canvas resize ────────────────────────────────────────────────────────
 
@@ -209,7 +213,7 @@ export default function SessionRoomClient() {
     return () => obs.disconnect();
   }, []);
 
-  // ── Canvas draw (static, read-only) ──────────────────────────────────────
+  // ── Canvas draw ──────────────────────────────────────────────────────────
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -227,7 +231,6 @@ export default function SessionRoomClient() {
 
     if (graphNodes.length === 0) return;
 
-    // Fit-to-canvas transform
     const xs  = graphNodes.map((n) => n.x);
     const ys  = graphNodes.map((n) => n.y);
     const pad = NR + 48;
@@ -264,7 +267,7 @@ export default function SessionRoomClient() {
       if (!from || !to) continue;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
+      ctx.lineTo(to.x,   to.y);
       ctx.strokeStyle = "rgba(78,205,196,0.22)";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([5, 6]);
@@ -346,141 +349,263 @@ export default function SessionRoomClient() {
     if (messages.some((m) => m.type === "DELIVERABLE")) setHasDeliverable(true);
   }, [messages]);
 
-  // ── Sync graphNodesRef ───────────────────────────────────────────────────
-
-  useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
-
-  // ── WebSocket / mock fallback ────────────────────────────────────────────
+  // ── Auto-send task_description on WS connect ─────────────────────────────
 
   useEffect(() => {
-    let cancelled = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
+    if (!wsOpen || !taskDescription || autoTaskSentRef.current) return;
+    autoTaskSentRef.current = true;
+    const taskMsg: Message = {
+      id: `auto-task-${Date.now()}`,
+      agentId: "human",
+      agentName: "YOU",
+      agentOrg: "Human",
+      role: "Requester",
+      type: "TASK",
+      content: taskDescription,
+      sigValid: true,
+      ts: new Date().toISOString(),
+      isHuman: true,
+    };
+    setMessages([taskMsg]);
+    callDemoAgents(taskDescription, [taskMsg]);
+  }, [wsOpen, taskDescription]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    function startMock() {
-      if (cancelled) return;
-      setIsMock(true);
-      const msgs = makeMockMessages(sessionId);
-      msgs.forEach((msg, i) => {
-        const t = setTimeout(() => {
-          if (cancelled) return;
-          setMessages((prev) => [...prev, msg]);
-        }, i * 1500 + 400);
-        timers.push(t);
-      });
+  // ── Fetch room data → build agent graph ──────────────────────────────────
+
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+
+    async function loadRoom() {
+      try {
+        const [roomRes, agentsRes] = await Promise.all([
+          fetch(`${API}/rooms/${roomId}`),
+          fetch(`${API}/agents`),
+        ]);
+
+        if (!roomRes.ok || !agentsRes.ok || cancelled) return;
+
+        const room = await roomRes.json();
+        const allAgents: Array<{ agent_id: string; name: string; framework: string }> =
+          await agentsRes.json();
+
+        const agentA = allAgents.find((a) => a.agent_id === room.agent_a_id);
+        const agentB = allAgents.find((a) => a.agent_id === room.agent_b_id);
+
+        const participants: Array<{
+          id: string; name: string; role: SessionRole; isHuman?: boolean;
+        }> = [
+          { id: "human", name: "YOU", role: "Requester", isHuman: true },
+        ];
+        if (agentA) {
+          participants.push({ id: agentA.agent_id, name: agentA.name, role: "Contributor" });
+        } else if (room.agent_a_id) {
+          participants.push({ id: room.agent_a_id, name: room.agent_a_id.slice(0, 8), role: "Contributor" });
+        }
+        if (agentB) {
+          participants.push({ id: agentB.agent_id, name: agentB.name, role: "Contributor" });
+        } else if (room.agent_b_id) {
+          participants.push({ id: room.agent_b_id, name: room.agent_b_id.slice(0, 8), role: "Contributor" });
+        }
+
+        if (cancelled) return;
+
+        if (participants.length > 1) {
+          const { nodes, edges } = buildGraph(participants);
+          setGraphNodes(nodes);
+          setGraphEdges(edges);
+          setParticipantCount(participants.length);
+        }
+
+        const contract = room.contract ?? room.room_contract ?? {};
+        const deliverableSpec: string = contract.deliverable_spec ?? room.deliverable_spec ?? "";
+        let fullTask: string = room.task_description ?? "";
+        if (fullTask && deliverableSpec) fullTask += `\n\nAcceptance criteria: ${deliverableSpec}`;
+        if (fullTask) setTaskDescription(fullTask);
+
+        if (room.status && UI_STATUS[room.status]) {
+          setStatus(UI_STATUS[room.status]);
+        }
+      } catch {
+        // Room endpoint unavailable — graph stays empty, WS may populate it
+      }
     }
 
+    loadRoom();
+    return () => { cancelled = true; };
+  }, [roomId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── WebSocket ────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
     let ws: WebSocket;
+
     try {
-      ws = new WebSocket(`ws://192.168.0.113:8000/ws/rooms/${sessionId}`);
+      ws = new WebSocket(`ws://192.168.0.113:8000/ws/rooms/${roomId}`);
       wsRef.current = ws;
     } catch {
-      startMock();
-      return () => { cancelled = true; timers.forEach(clearTimeout); };
+      return;
     }
 
-    const failTimer = setTimeout(() => {
-      if (!cancelled) { ws.close(); startMock(); }
-    }, 2500);
-    timers.push(failTimer);
-
     ws.onopen = () => {
-      clearTimeout(failTimer);
-      if (!cancelled) setIsMock(false);
+      if (!cancelled) setWsOpen(true);
     };
 
     ws.onmessage = (e) => {
       if (cancelled) return;
       try {
         const data = JSON.parse(e.data as string);
+
         if (data.type === "session_init") {
           const init = data.data;
-          if (init?.participants?.length) {
-            const nodes = buildGraphFromParticipants(init.participants);
+          // Populate graph from WS init if room fetch hasn't done it yet
+          if (init?.participants?.length && graphNodesRef.current.length === 0) {
+            const participants = init.participants as Array<{
+              agent_id: string; name: string; role: SessionRole; is_human?: boolean;
+            }>;
+            const { nodes, edges } = buildGraph(
+              participants.map((p) => ({
+                id: p.agent_id,
+                name: p.name,
+                role: p.role,
+                isHuman: p.is_human,
+              })),
+            );
             setGraphNodes(nodes);
-            const edges: GraphEdge[] = [];
-            for (let i = 0; i < nodes.length - 1; i++) {
-              edges.push({ fromId: nodes[i].id, toId: nodes[i + 1].id });
-            }
-            if (nodes.length > 1) edges.push({ fromId: nodes[nodes.length - 1].id, toId: nodes[0].id });
             setGraphEdges(edges);
           }
           if (init?.participant_count) setParticipantCount(init.participant_count);
-          callDemoRef.current("", []);
+          if (init?.status && UI_STATUS[init.status]) setStatus(UI_STATUS[init.status]);
         } else if (data.type === "message") {
-          setMessages((prev) => [...prev, data.data as Message]);
+          const incoming = data.data as Message;
+          setMessages((prev) =>
+            prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming],
+          );
         } else if (data.type === "status_update") {
-          const s = data.data.status as SessionStatus;
-          setStatus(s);
-          if (s === "CLOSED_SUCCESS" || s === "CLOSED_DISPUTED") {
-            setOutcome(s === "CLOSED_SUCCESS" ? "SUCCESS" : "DISPUTED");
-            setShowModal(true);
-          }
+          const s: string = data.data?.status ?? "";
+          if (UI_STATUS[s]) setStatus(UI_STATUS[s]);
         }
       } catch { /* ignore malformed frames */ }
     };
 
-    ws.onerror = () => {
-      clearTimeout(failTimer);
-      if (!cancelled) startMock();
-    };
-
     return () => {
       cancelled = true;
-      timers.forEach(clearTimeout);
       ws.close();
     };
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [roomId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Demo agent integration ───────────────────────────────────────────────
+  // ── Demo agent responses ──────────────────────────────────────────────────
 
-  async function callDemoAgents(lastMessage: string, sessionMessages: Message[]) {
-    const agents = graphNodesRef.current.filter((n) => !n.isHuman);
-    for (const agent of agents) {
+  function toDemoSlug(name: string): string {
+    return name.toLowerCase();
+  }
+
+  async function callDemoAgents(humanText: string, sessionMessages: Message[]) {
+    const agents = graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer");
+    if (agents.length === 0) return;
+
+    function addSystemMsg(content: string) {
+      const msg = systemMsg(content);
+      setMessages((prev) => [...prev, msg]);
+    }
+
+    async function callAgent(
+      agent: GraphNode,
+      prompt: string,
+      context: Message[],
+      type: MessageType,
+    ): Promise<Message | null> {
       try {
-        const res = await fetch("http://192.168.0.113:8000/api/v1/demo/respond", {
+        const res = await fetch(`${API}/demo/respond`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            room_id: sessionId,
-            message: lastMessage,
-            agent_id: agent.label.toLowerCase(),
-            session_messages: sessionMessages,
+            room_id: roomId,
+            message: prompt,
+            agent_id: toDemoSlug(agent.label),
+            session_messages: context,
           }),
         });
+
         if (res.status === 429) {
           const body = await res.json().catch(() => ({}));
           if (body.error === "demo_limit_reached") setDemoLimitReached(true);
-          return;
+          return null;
         }
-        if (!res.ok) continue;
+        if (!res.ok) return null;
+
         const data = await res.json();
         if (data.messages_remaining != null) setMessagesRemaining(data.messages_remaining);
-        const content: string = data.message ?? data.content ?? data.response ?? "";
-        if (!content) continue;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `demo-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            agentId: agent.id,
-            agentName: agent.label,
-            agentOrg: "",
-            role: agent.role,
-            type: "TASK" as MessageType,
-            content,
-            sigValid: true,
-            ts: new Date().toISOString(),
-          },
-        ]);
-      } catch { /* network error — skip */ }
+
+        const content: string = data.response ?? data.message ?? data.content ?? "";
+        if (!content) return null;
+
+        const agentMsg: Message = {
+          id: `demo-${type}-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          agentId: agent.id,
+          agentName: data.agent_name ?? agent.label,
+          agentOrg: "",
+          role: agent.role,
+          type,
+          content,
+          sigValid: true,
+          ts: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, agentMsg]);
+        return agentMsg;
+      } catch {
+        return null;
+      }
+    }
+
+    // ── ROUND 1: Independent analysis (parallel) ──────────────────────────────
+    addSystemMsg("Round 1 — Independent analysis");
+    const r1Prompt =
+      `${humanText}\n\nRound 1: Provide your independent expert analysis. Do not hold back your perspective.`;
+    const r1Results = await Promise.all(
+      agents.map((agent) => callAgent(agent, r1Prompt, sessionMessages, "R1")),
+    );
+    const r1Messages = r1Results.filter((m): m is Message => m !== null);
+    if (r1Messages.length === 0) return;
+
+    // ── ROUND 2: Cross-review (sequential) ───────────────────────────────────
+    addSystemMsg("Round 2 — Cross-review");
+    const r2Prompt =
+      "Round 2: You have read your colleagues' initial analyses. Identify where you agree, where you disagree, and refine your position. Be specific about what you accept or challenge from others.";
+    const r2Base = [...sessionMessages, ...r1Messages];
+    const r2Messages: Message[] = [];
+    for (const agent of agents) {
+      const msg = await callAgent(agent, r2Prompt, [...r2Base, ...r2Messages], "R2");
+      if (!msg) continue;
+      r2Messages.push(msg);
+    }
+    if (r2Messages.length === 0) return;
+
+    // ── ROUND 3: Consensus and deliverable (sequential) ──────────────────────
+    addSystemMsg("Round 3 — Consensus and deliverable");
+    const r3Prompt =
+      "Round 3 (final): Based on all previous discussion, contribute your section to the unified team deliverable. The last agent should synthesize everything into one cohesive document.";
+    const r3Base = [...r2Base, ...r2Messages];
+    for (let i = 0; i < agents.length; i++) {
+      const agent = agents[i];
+      const isLast = i === agents.length - 1;
+      const prompt = isLast
+        ? `${r3Prompt} You are the last agent — synthesize all contributions into one cohesive final document.`
+        : r3Prompt;
+      const msg = await callAgent(agent, prompt, r3Base, isLast ? "DELIVERABLE" : "R3");
+      if (msg) r3Base.push(msg);
     }
   }
-  callDemoRef.current = callDemoAgents;
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  // ── Send human message ────────────────────────────────────────────────────
 
-  function sendMessage() {
+  async function sendMessage() {
     const text = inputText.trim();
-    if (!text) return;
+    if (!text || sending) return;
+    setSending(true);
+
     const msg: Message = {
       id: `local-${Date.now()}`,
       agentId: "human",
@@ -493,48 +618,120 @@ export default function SessionRoomClient() {
       ts: new Date().toISOString(),
       isHuman: true,
     };
+
     const updatedMessages = [...messages, msg];
     setMessages(updatedMessages);
+    setInputText("");
+
+    // Best-effort backend POST — will fail without real agent credentials in demo mode
+    fetch(`${API}/rooms/${roomId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sender_agent_id: "00000000-0000-0000-0000-000000000000",
+        private_key_b64: "",
+        content_natural: text,
+        message_type: BACKEND_TYPE[inputType],
+      }),
+    }).catch(() => {/* expected without real credentials */});
+
+    // Forward over WebSocket
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "message", data: msg }));
     }
-    setInputText("");
-    callDemoRef.current(text, updatedMessages);
+
+    // Trigger demo agent responses for each non-human Contributor
+    await callDemoAgents(text, updatedMessages);
+    setSending(false);
   }
 
-  function handleConforme() {
-    setStatus("CLOSED_SUCCESS");
-    setOutcome("SUCCESS");
-    setShowModal(true);
-    wsRef.current?.readyState === WebSocket.OPEN &&
-      wsRef.current.send(JSON.stringify({ type: "verdict", data: { verdict: "CONFORME" } }));
-  }
+  // ── Verdict handlers ──────────────────────────────────────────────────────
 
-  function handleNoConforme() {
-    setStatus("CLOSED_DISPUTED");
-    setOutcome("DISPUTED");
-    setShowModal(true);
-    wsRef.current?.readyState === WebSocket.OPEN &&
-      wsRef.current.send(JSON.stringify({ type: "verdict", data: { verdict: "NO_CONFORME" } }));
+  async function postVerdict(verdict: "CONFORME" | "NO_CONFORME", reason = "") {
+    if (verdictLoading) return;
+    setVerdictLoading(true);
+    try {
+      const res = await fetch(`${API}/rooms/${roomId}/verdict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ verdict, reason }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const backendStatus: string = data.status ?? "";
+        const backendOutcome: string = data.outcome ?? "";
+
+        if (backendStatus === "CLOSED" || backendOutcome === "SUCCESS") {
+          setStatus("CLOSED_SUCCESS");
+          setOutcome("SUCCESS");
+          setShowModal(true);
+          return;
+        }
+        if (backendStatus === "DISPUTED" || backendOutcome === "DISPUTE") {
+          setStatus("CLOSED_DISPUTED");
+          setOutcome("DISPUTED");
+          setShowModal(true);
+          return;
+        }
+        if (backendStatus === "REVISION") {
+          // Revision round — stay open, let agents respond
+          setMessages((prev) => [
+            ...prev,
+            systemMsg("Revision requested. Agents will address the feedback."),
+          ]);
+          await callDemoAgents(
+            reason || "Please revise the deliverable.",
+            [...messages, systemMsg("Revision requested.")],
+          );
+          return;
+        }
+      }
+
+      // Fallback: if backend call fails, apply verdict locally
+      if (verdict === "CONFORME") {
+        setStatus("CLOSED_SUCCESS");
+        setOutcome("SUCCESS");
+        setShowModal(true);
+      } else {
+        setStatus("CLOSED_DISPUTED");
+        setOutcome("DISPUTED");
+        setShowModal(true);
+      }
+    } catch {
+      // Network error — apply locally
+      if (verdict === "CONFORME") {
+        setStatus("CLOSED_SUCCESS");
+        setOutcome("SUCCESS");
+        setShowModal(true);
+      } else {
+        setStatus("CLOSED_DISPUTED");
+        setOutcome("DISPUTED");
+        setShowModal(true);
+      }
+    } finally {
+      setVerdictLoading(false);
+    }
   }
 
   function downloadLog() {
     const blob = new Blob(
-      [JSON.stringify({ sessionId, status, messages }, null, 2)],
+      [JSON.stringify({ roomId, status, messages }, null, 2)],
       { type: "application/json" },
     );
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `session-${sessionId}.json`;
+    const a   = document.createElement("a");
+    a.href     = url;
+    a.download = `session-${roomId}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isClosed = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
-  const step     = STATUS_STEP[status];
+  const isClosed  = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
+  const step      = STATUS_STEP[status];
+  const agentNodes = graphNodes.filter((n) => !n.isHuman);
 
   return (
     <div className="h-screen flex flex-col bg-al-bg text-al-text overflow-hidden">
@@ -551,15 +748,8 @@ export default function SessionRoomClient() {
             </svg>
             Directory
           </Link>
-          <span className="font-mono text-xs text-al-muted">{sessionId}</span>
-          <div className="flex items-center gap-2">
-            {isMock && (
-              <span className="text-[10px] text-al-muted border border-al-border rounded px-2 py-0.5 uppercase tracking-wide">
-                Demo
-              </span>
-            )}
-            <StatusBadge status={status} />
-          </div>
+          <span className="font-mono text-xs text-al-muted">{roomId}</span>
+          <StatusBadge status={status} />
         </div>
       </header>
 
@@ -592,16 +782,24 @@ export default function SessionRoomClient() {
       {/* Body */}
       <div className="flex flex-1 min-h-0">
 
-        {/* ── Left: static graph (45%) ── */}
+        {/* ── Left: team graph (45%) ── */}
         <div
           ref={containerRef}
           className="shrink-0 relative border-r border-al-border bg-al-surface overflow-hidden"
           style={{ width: "45%" }}
         >
           <canvas ref={canvasRef} style={{ display: "block" }} />
+
+          {graphNodes.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
+              <span className="text-xs text-al-muted">Connecting…</span>
+            </div>
+          )}
+
           <div className="absolute top-3 left-3 text-[10px] text-al-muted uppercase tracking-widest select-none pointer-events-none">
             Team Graph · Read-only
           </div>
+
           {/* Legend */}
           <div className="absolute bottom-3 left-3 flex flex-col gap-1.5 pointer-events-none select-none">
             {(Object.entries(ROLE_COLOR) as [SessionRole, string][]).map(([role, color]) => (
@@ -611,10 +809,7 @@ export default function SessionRoomClient() {
               </div>
             ))}
             <div className="flex items-center gap-1.5">
-              <span
-                className="w-2 h-2 shrink-0 rotate-45 inline-block"
-                style={{ background: HUMAN_COLOR }}
-              />
+              <span className="w-2 h-2 shrink-0 rotate-45 inline-block" style={{ background: HUMAN_COLOR }} />
               <span className="text-[10px] text-al-muted">Human</span>
             </div>
           </div>
@@ -626,10 +821,12 @@ export default function SessionRoomClient() {
           {/* Chat header */}
           <div className="shrink-0 border-b border-al-border bg-al-surface px-5 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="font-mono text-sm text-al-text">{sessionId}</span>
+              <span className="font-mono text-sm text-al-text">{roomId}</span>
               <StatusBadge status={status} />
             </div>
-            <span className="text-xs text-al-muted">{participantCount} participants</span>
+            {participantCount > 0 && (
+              <span className="text-xs text-al-muted">{participantCount} participants</span>
+            )}
           </div>
 
           {/* Messages */}
@@ -642,7 +839,8 @@ export default function SessionRoomClient() {
                     <path strokeLinecap="round" strokeWidth={1.5} d="M8 5v3l2 2" />
                   </svg>
                 </div>
-                <p className="text-sm">Connecting to session…</p>
+                <p className="text-sm">Connecting…</p>
+                <p className="text-xs mt-1">Send a message to start the session</p>
               </div>
             )}
             {messages.map((msg) => (
@@ -675,14 +873,24 @@ export default function SessionRoomClient() {
                   type="text"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                  }}
                   placeholder="Send a message…"
-                  className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                  disabled={sending}
+                  className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors disabled:opacity-50"
                 />
                 <button
                   onClick={sendMessage}
-                  className="px-4 py-1.5 bg-al-accent text-al-bg rounded-lg text-sm font-semibold hover:bg-al-accent-dim active:scale-[0.98] transition-all"
+                  disabled={sending || !inputText.trim()}
+                  className="px-4 py-1.5 bg-al-accent text-al-bg rounded-lg text-sm font-semibold hover:bg-al-accent-dim active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
+                  {sending && (
+                    <svg className="w-3 h-3 animate-spin shrink-0" fill="none" viewBox="0 0 12 12">
+                      <circle className="opacity-25" cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="2" />
+                      <path className="opacity-75" fill="currentColor" d="M10 6a4 4 0 0 0-4-4V0a6 6 0 0 1 6 6h-2z" />
+                    </svg>
+                  )}
                   Send
                 </button>
               </div>
@@ -695,8 +903,9 @@ export default function SessionRoomClient() {
             {hasDeliverable && !isClosed && (
               <div className="flex gap-2.5">
                 <button
-                  onClick={handleConforme}
-                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
+                  onClick={() => postVerdict("CONFORME")}
+                  disabled={verdictLoading}
+                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
                   style={{
                     background: "rgba(34,197,94,0.12)",
                     border: "1px solid rgba(34,197,94,0.4)",
@@ -706,8 +915,9 @@ export default function SessionRoomClient() {
                   CONFORME
                 </button>
                 <button
-                  onClick={handleNoConforme}
-                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
+                  onClick={() => postVerdict("NO_CONFORME")}
+                  disabled={verdictLoading}
+                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
                   style={{
                     background: "rgba(239,68,68,0.12)",
                     border: "1px solid rgba(239,68,68,0.4)",
@@ -727,7 +937,8 @@ export default function SessionRoomClient() {
       {showModal && outcome && (
         <CloseModal
           outcome={outcome}
-          sessionId={sessionId}
+          roomId={roomId}
+          agents={agentNodes}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
         />
@@ -766,17 +977,13 @@ function MessageBubble({ msg }: { msg: Message }) {
 
   return (
     <div className="flex gap-3">
-      {/* Avatar */}
       <div
         className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold"
         style={{ background: `${rc}1A`, border: `1.5px solid ${rc}55`, color: rc }}
       >
         {ini}
       </div>
-
-      {/* Body */}
       <div className="flex-1 min-w-0">
-        {/* Header row */}
         <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
           <span className="text-sm font-semibold text-al-text">{msg.agentName}</span>
           {msg.agentOrg && (
@@ -790,7 +997,6 @@ function MessageBubble({ msg }: { msg: Message }) {
           >
             {msg.type}
           </span>
-          {/* Signature */}
           <span
             className="text-[10px] flex items-center gap-0.5 leading-none"
             style={{ color: msg.sigValid ? "#22C55E" : "#EF4444" }}
@@ -804,15 +1010,12 @@ function MessageBubble({ msg }: { msg: Message }) {
             {msg.sigValid ? "sig valid" : "sig invalid"}
           </span>
         </div>
-
-        {/* Message bubble */}
         <div
           className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed whitespace-pre-line break-words"
           style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
         >
           {msg.content}
         </div>
-
         <div className="text-[10px] text-al-muted mt-1">
           {new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
         </div>
@@ -826,9 +1029,7 @@ function ProgressBar({ step, status }: { step: number; status: SessionStatus }) 
     status === "CLOSED_SUCCESS"  ? "#22C55E" :
     status === "CLOSED_DISPUTED" ? "#EF4444" :
     status === "VERIFYING"       ? "#F59E0B" : "#4ECDC4";
-
   const steps = ["OPEN", "VERIFYING", "CLOSED"];
-
   return (
     <div>
       <div className="flex justify-between mb-1.5">
@@ -854,23 +1055,19 @@ function ProgressBar({ step, status }: { step: number; status: SessionStatus }) 
 
 function CloseModal({
   outcome,
-  sessionId,
+  roomId,
+  agents,
   onDownload,
   onClose,
 }: {
   outcome: "SUCCESS" | "DISPUTED";
-  sessionId: string;
+  roomId: string;
+  agents: GraphNode[];
   onDownload: () => void;
   onClose: () => void;
 }) {
   const isSuccess = outcome === "SUCCESS";
-  const color = isSuccess ? "#22C55E" : "#F59E0B";
-
-  const repUpdates = [
-    { name: "Nexus-7",  delta: isSuccess ? "+0.12" : "-0.08" },
-    { name: "Aria-ML",  delta: isSuccess ? "+0.15" : "-0.20" },
-    { name: "Sigma-QA", delta: isSuccess ? "+0.10" : "-0.05" },
-  ];
+  const color     = isSuccess ? "#22C55E" : "#F59E0B";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
@@ -905,37 +1102,30 @@ function CloseModal({
           </p>
         </div>
 
-        {/* Reputation updates */}
-        <div className="bg-al-bg rounded-xl border border-al-border p-4 mb-4">
-          <p className="text-[10px] text-al-muted uppercase tracking-wider mb-3">Reputation Updates</p>
-          <div className="space-y-2">
-            {repUpdates.map((r) => (
-              <div key={r.name} className="flex items-center justify-between">
-                <span className="text-sm text-al-text">{r.name}</span>
-                <span
-                  className="text-sm font-semibold tabular-nums"
-                  style={{ color: r.delta.startsWith("+") ? "#22C55E" : "#EF4444" }}
-                >
-                  {r.delta}
-                </span>
-              </div>
-            ))}
+        {/* Reputation updates derived from actual session agents */}
+        {agents.length > 0 && (
+          <div className="bg-al-bg rounded-xl border border-al-border p-4 mb-4">
+            <p className="text-[10px] text-al-muted uppercase tracking-wider mb-3">Reputation Updates</p>
+            <div className="space-y-2">
+              {agents.map((agent) => (
+                <div key={agent.id} className="flex items-center justify-between">
+                  <span className="text-sm text-al-text">{agent.label}</span>
+                  <span
+                    className="text-sm font-semibold tabular-nums"
+                    style={{ color: isSuccess ? "#22C55E" : "#EF4444" }}
+                  >
+                    {isSuccess ? "+0.10" : "-0.10"}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* GitHub link */}
-        <div className="mb-5">
-          <a
-            href={`https://github.com/agentlink/session-${sessionId.toLowerCase()}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 text-sm text-al-accent hover:text-al-text transition-colors"
-          >
-            <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.04c-3.34.72-4.04-1.6-4.04-1.6-.54-1.38-1.32-1.74-1.32-1.74-1.08-.74.08-.72.08-.72 1.2.08 1.83 1.22 1.83 1.22 1.06 1.82 2.78 1.3 3.46.98.1-.76.42-1.28.76-1.58-2.66-.3-5.46-1.33-5.46-5.9 0-1.3.46-2.36 1.22-3.2-.12-.3-.52-1.52.12-3.16 0 0 1-.32 3.28 1.22a11.4 11.4 0 013-.4c1.02 0 2.04.14 3 .4 2.28-1.54 3.28-1.22 3.28-1.22.64 1.64.24 2.86.12 3.16.76.84 1.22 1.9 1.22 3.2 0 4.58-2.8 5.6-5.48 5.9.44.38.82 1.12.82 2.26v3.36c0 .32.22.7.82.58C20.56 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
-            </svg>
-            View session on GitHub
-          </a>
+        {/* Room ID reference */}
+        <div className="mb-5 px-3 py-2 bg-al-bg rounded-lg border border-al-border">
+          <p className="text-[10px] text-al-muted mb-1">Session ID</p>
+          <p className="font-mono text-xs text-al-text break-all">{roomId}</p>
         </div>
 
         {/* Actions */}
@@ -949,11 +1139,7 @@ function CloseModal({
           <button
             onClick={onClose}
             className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
-            style={{
-              background: `${color}15`,
-              border: `1px solid ${color}40`,
-              color,
-            }}
+            style={{ background: `${color}15`, border: `1px solid ${color}40`, color }}
           >
             Close
           </button>

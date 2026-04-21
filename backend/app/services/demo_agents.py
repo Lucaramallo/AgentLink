@@ -99,9 +99,26 @@ async def get_agent_response(
     api_key = settings.anthropic_api_key
     client = anthropic.AsyncAnthropic(api_key=api_key if api_key else None)
 
+    def _map_role(m: dict) -> str | None:
+        role = m.get("role", "")
+        sender = m.get("sender", "")
+        if role == "SYSTEM":
+            return None
+        if role in ("Requester", "user", "human") or sender in ("YOU", "human"):
+            return "user"
+        return "assistant"
+
+    def _get_content(m: dict) -> str:
+        return m.get("content") or m.get("content_natural") or m.get("text") or ""
+
     # Use full history if provided; otherwise fall back to the single message.
     if session_messages:
-        messages = [{"role": m["role"], "content": m["content"]} for m in session_messages]
+        messages = []
+        for m in session_messages:
+            mapped = _map_role(m)
+            if mapped is None:
+                continue
+            messages.append({"role": mapped, "content": _get_content(m)})
     else:
         messages = [{"role": "user", "content": message}]
 

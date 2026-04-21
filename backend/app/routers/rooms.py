@@ -6,6 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.agent import Agent
@@ -46,6 +48,26 @@ class DeliverableVerdict(BaseModel):
 
 
 # --- Endpoints REST ---
+
+@router.get("/{room_id}")
+async def get_room(
+    room_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    result = await db.execute(
+        select(Room).options(selectinload(Room.contract)).where(Room.room_id == room_id)
+    )
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala no encontrada.")
+    return {
+        "room_id": str(room.room_id),
+        "status": room.status,
+        "task_description": room.contract.task_description,
+        "agent_a_id": str(room.agent_a_id),
+        "agent_b_id": str(room.agent_b_id),
+    }
+
 
 @router.post("/contracts", status_code=status.HTTP_201_CREATED)
 async def create_contract(
