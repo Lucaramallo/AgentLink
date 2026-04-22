@@ -12,7 +12,7 @@ from app.services.demo_agents import AGENTS, get_agent_response
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
-_MAX_MESSAGES = 5
+_MAX_MESSAGES = 25
 _SESSION_TTL = 3600  # seconds
 
 

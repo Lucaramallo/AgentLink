@@ -695,6 +695,23 @@ export default function SessionBuildClient() {
       if (!roomRes.ok) throw new Error(`Failed to open room (${roomRes.status})`);
       const { room_id } = await roomRes.json();
 
+      sessionStorage.setItem(
+        "agentlink_session_graph",
+        JSON.stringify({
+          nodes: nodes.map((n) => ({
+            id: n.id,
+            agentId: n.agent.id,
+            agentName: n.agent.name,
+            role: n.role,
+            label: n.agent.name,
+            x: n.x,
+            y: n.y,
+            isHuman: n.isHuman ?? false,
+          })),
+          edges: conns.map((c) => ({ a: c.fromId, b: c.toId })),
+        }),
+      );
+
       router.push(`/session/${room_id}`);
     } catch (err) {
       setOpenError(err instanceof Error ? err.message : "Unexpected error");

@@ -200,6 +200,38 @@ export default function SessionRoomClient() {
   // Stable ref so async callbacks always see latest nodes
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
 
+  // Flag set when we restore from sessionStorage — prevents API from overwriting
+  const savedGraphLoadedRef = useRef(false);
+
+  // ── Restore canvas layout from build page ───────────────────────────────
+  useEffect(() => {
+    const raw = sessionStorage.getItem("agentlink_session_graph");
+    if (!raw) return;
+    sessionStorage.removeItem("agentlink_session_graph");
+    try {
+      const saved = JSON.parse(raw) as {
+        nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean }>;
+        edges: Array<{ a: string; b: string }>;
+      };
+      const restoredNodes: GraphNode[] = saved.nodes.map((n) => ({
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        label: n.agentName,
+        role: n.role,
+        isHuman: n.isHuman,
+      }));
+      const restoredEdges: GraphEdge[] = saved.edges.map((e) => ({
+        fromId: e.a,
+        toId: e.b,
+      }));
+      setGraphNodes(restoredNodes);
+      setGraphEdges(restoredEdges);
+      setParticipantCount(restoredNodes.length);
+      savedGraphLoadedRef.current = true;
+    } catch { /* malformed — fall back to API */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Canvas resize ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -410,7 +442,7 @@ export default function SessionRoomClient() {
 
         if (cancelled) return;
 
-        if (participants.length > 1) {
+        if (participants.length > 1 && !savedGraphLoadedRef.current) {
           const { nodes, edges } = buildGraph(participants);
           setGraphNodes(nodes);
           setGraphEdges(edges);
