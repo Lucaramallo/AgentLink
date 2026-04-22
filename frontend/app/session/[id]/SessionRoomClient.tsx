@@ -197,8 +197,10 @@ export default function SessionRoomClient() {
   const [demoLimitReached, setDemoLimitReached]   = useState(false);
   const [messagesRemaining, setMessagesRemaining] = useState<number | null>(null);
 
-  // Stable ref so async callbacks always see latest nodes
+  // Stable refs so async callbacks always see latest graph state
+  const graphEdgesRef = useRef<GraphEdge[]>([]);
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
+  useEffect(() => { graphEdgesRef.current = graphEdges; }, [graphEdges]);
 
   // Flag set when we restore from sessionStorage — prevents API from overwriting
   const savedGraphLoadedRef = useRef(false);
@@ -543,6 +545,22 @@ export default function SessionRoomClient() {
       setMessages((prev) => [...prev, msg]);
     }
 
+    function getVisibleContext(agent: GraphNode, context: Message[]): Message[] {
+      const edges = graphEdgesRef.current;
+      const neighborIds = new Set(
+        edges
+          .filter((e) => e.fromId === agent.id || e.toId === agent.id)
+          .map((e) => (e.fromId === agent.id ? e.toId : e.fromId)),
+      );
+      return context.filter(
+        (m) =>
+          m.isHuman ||
+          m.agentId === "system" ||
+          m.agentId === agent.id ||
+          neighborIds.has(m.agentId),
+      );
+    }
+
     async function callAgent(
       agent: GraphNode,
       prompt: string,
@@ -597,7 +615,7 @@ export default function SessionRoomClient() {
     const r1Prompt =
       `${humanText}\n\nRound 1: Provide your independent expert analysis. Do not hold back your perspective.`;
     const r1Results = await Promise.all(
-      agents.map((agent) => callAgent(agent, r1Prompt, sessionMessages, "R1")),
+      agents.map((agent) => callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages), "R1")),
     );
     const r1Messages = r1Results.filter((m): m is Message => m !== null);
     if (r1Messages.length === 0) return;
@@ -609,7 +627,7 @@ export default function SessionRoomClient() {
     const r2Base = [...sessionMessages, ...r1Messages];
     const r2Messages: Message[] = [];
     for (const agent of agents) {
-      const msg = await callAgent(agent, r2Prompt, [...r2Base, ...r2Messages], "R2");
+      const msg = await callAgent(agent, r2Prompt, getVisibleContext(agent, [...r2Base, ...r2Messages]), "R2");
       if (!msg) continue;
       r2Messages.push(msg);
     }
@@ -626,7 +644,7 @@ export default function SessionRoomClient() {
       const prompt = isLast
         ? `${r3Prompt} You are the last agent — synthesize all contributions into one cohesive final document.`
         : r3Prompt;
-      const msg = await callAgent(agent, prompt, r3Base, isLast ? "DELIVERABLE" : "R3");
+      const msg = await callAgent(agent, prompt, getVisibleContext(agent, r3Base), isLast ? "DELIVERABLE" : "R3");
       if (msg) r3Base.push(msg);
     }
   }
