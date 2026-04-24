@@ -6,7 +6,7 @@ import Link from "next/link";
 import type { Agent, SessionRole } from "../../lib/types";
 import { fetchAgents } from "../../lib/api";
 
-const API_BASE = "http://192.168.0.113:8000/api/v1";
+const API_BASE = "http://192.168.0.114:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
 const OWNER_B = "7059dca2-afe8-4908-9e69-b2451b0be356";
 
@@ -18,7 +18,7 @@ function parseTimeoutHours(s: string): number {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const NR = 44; // node radius px
+const NR = 44;
 const ROLES: SessionRole[] = ["Requester", "Contributor", "Reviewer", "Observer"];
 const ROLE_COLOR: Record<SessionRole, string> = {
   Requester: "#4ECDC4",
@@ -27,6 +27,8 @@ const ROLE_COLOR: Record<SessionRole, string> = {
   Observer: "#64748B",
 };
 
+const CLUSTER_COLORS = ["#00BCD4", "#9575CD", "#FFB300", "#FF7043"];
+const CLUSTER_NAMES = ["Team Alpha", "Team Beta", "Team Gamma", "Team Delta", "Team Epsilon"];
 
 const AL_RULES = [
   "All inter-agent messages must be cryptographically signed with the sending agent's registered key.",
@@ -63,12 +65,25 @@ interface CanvasNode {
   agent: Agent;
   role: SessionRole;
   isHuman?: boolean;
+  clusterId?: string;
+  isBuilder?: boolean;
 }
 
 interface Conn {
   id: string;
   fromId: string;
   toId: string;
+}
+
+interface Cluster {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  rx: number;
+  ry: number;
+  color: string;
+  subTask: string;
 }
 
 interface CustomClause {
@@ -120,27 +135,33 @@ function rrect(
   ctx.closePath();
 }
 
+function isInsideEllipse(x: number, y: number, c: Cluster): boolean {
+  return ((x - c.x) / c.rx) ** 2 + ((y - c.y) / c.ry) ** 2 <= 1;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function SessionBuildClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Canvas refs
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [canvasW, setCanvasW] = useState(800);
   const [canvasH, setCanvasH] = useState(600);
 
-  // Graph state
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [conns, setConns] = useState<Conn[]>([]);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
 
-  // Interaction — mutable refs to avoid stale closures in event handlers
+  // Interaction refs
   const draggingRef = useRef<{ nodeId: string; ox: number; oy: number } | null>(null);
+  const draggingClusterRef = useRef<{ clusterId: string; ox: number; oy: number; prevX: number; prevY: number } | null>(null);
+  const resizingClusterRef = useRef<{ clusterId: string; handle: "n" | "s" | "e" | "w" } | null>(null);
   const nodesRef = useRef<CanvasNode[]>([]);
   const connsRef = useRef<Conn[]>([]);
-  const linkingRef = useRef<string | null>(null); // nodeId of link source
+  const clustersRef = useRef<Cluster[]>([]);
+  const linkingRef = useRef<string | null>(null);
   const hoveredConnRef = useRef<string | null>(null);
 
   // Zoom / pan
@@ -149,13 +170,15 @@ export default function SessionBuildClient() {
   const zoomRef = useRef(1);
   const panRef = useRef({ x: 0, y: 0 });
 
-  // Reactive state for re-render/redraw triggers
+  // Reactive hover / interaction state
   const [linking, setLinking] = useState<string | null>(null);
   const [linkCursor, setLinkCursor] = useState<{ x: number; y: number } | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
   const [hoveredConn, setHoveredConn] = useState<string | null>(null);
+  const [hoveredCluster, setHoveredCluster] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+  const [editingClusterName, setEditingClusterName] = useState<string | null>(null);
 
   // Agent picker
   const [showPicker, setShowPicker] = useState(false);
@@ -176,15 +199,14 @@ export default function SessionBuildClient() {
   // Keep refs in sync with state
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { connsRef.current = conns; }, [conns]);
+  useEffect(() => { clustersRef.current = clusters; }, [clusters]);
   useEffect(() => { linkingRef.current = linking; }, [linking]);
   useEffect(() => { hoveredConnRef.current = hoveredConn; }, [hoveredConn]);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => { panRef.current = pan; }, [pan]);
 
-  // Stable session ID (generated once per mount)
   const sessionIdRef = useRef(`AL-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
 
-  // Agent list (fetched from backend)
   const [allAgents, setAllAgents] = useState<Agent[]>([]);
   useEffect(() => { fetchAgents().then(setAllAgents); }, []);
 
@@ -243,12 +265,11 @@ export default function SessionBuildClient() {
 
     ctx.clearRect(0, 0, canvasW, canvasH);
 
-    // Apply viewport transform (pan + zoom); all world-space drawing goes inside this.
     ctx.save();
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
 
-    // Dot grid — draw over the visible world area only
+    // Dot grid
     const wxMin = Math.floor(-pan.x / zoom / 40) * 40;
     const wxMax = Math.ceil((canvasW - pan.x) / zoom / 40) * 40;
     const wyMin = Math.floor(-pan.y / zoom / 40) * 40;
@@ -263,6 +284,57 @@ export default function SessionBuildClient() {
     }
 
     const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+    // ── Clusters (drawn behind nodes) ────────────────────────────────────
+    for (const c of clusters) {
+      const hov = hoveredCluster === c.id;
+
+      ctx.save();
+
+      // Ellipse fill
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `${c.color}1a`;
+      ctx.fill();
+
+      // Ellipse border
+      ctx.strokeStyle = hov ? `${c.color}cc` : `${c.color}55`;
+      ctx.lineWidth = hov ? 2 : 1.5;
+      ctx.setLineDash(hov ? [] : [10, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Cluster name label (skip if being edited — HTML input overlays it)
+      if (editingClusterName !== c.id) {
+        const labelY = c.y - c.ry + 22;
+        ctx.font = `bold 13px ${FONT}`;
+        ctx.fillStyle = hov ? c.color : `${c.color}bb`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(c.name, c.x, labelY);
+      }
+
+      // Resize handles at N / S / E / W — shown when hovered
+      if (hov) {
+        const handles = [
+          { x: c.x,        y: c.y - c.ry },
+          { x: c.x,        y: c.y + c.ry },
+          { x: c.x + c.rx, y: c.y        },
+          { x: c.x - c.rx, y: c.y        },
+        ];
+        for (const h of handles) {
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = c.color;
+          ctx.fill();
+          ctx.strokeStyle = "#0B1120";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+
+      ctx.restore();
+    }
 
     // ── Connections ──────────────────────────────────────────────────────
     for (const c of conns) {
@@ -283,7 +355,6 @@ export default function SessionBuildClient() {
       if (hov) {
         const mx = (from.x + to.x) / 2;
         const my = (from.y + to.y) / 2;
-        // ✕ circle
         ctx.beginPath();
         ctx.arc(mx, my, 11, 0, Math.PI * 2);
         ctx.fillStyle = "#0D1421";
@@ -291,7 +362,6 @@ export default function SessionBuildClient() {
         ctx.strokeStyle = "#4ECDC4";
         ctx.lineWidth = 1.5;
         ctx.stroke();
-        // ✕ lines
         ctx.beginPath();
         ctx.lineCap = "round";
         ctx.strokeStyle = "#4ECDC4";
@@ -352,13 +422,11 @@ export default function SessionBuildClient() {
         ctx.shadowBlur = 22;
       }
 
-      // Fill
       const g = ctx.createRadialGradient(node.x, node.y - 14, 4, node.x, node.y, NR);
       g.addColorStop(0, "#1B2845");
       g.addColorStop(1, "#0B1120");
 
       if (node.isHuman) {
-        // Diamond shape
         ctx.beginPath();
         ctx.moveTo(node.x, node.y - NR);
         ctx.lineTo(node.x + NR, node.y);
@@ -373,19 +441,16 @@ export default function SessionBuildClient() {
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // Border
       ctx.strokeStyle = active ? rc : `${rc}66`;
       ctx.lineWidth = active ? 2.5 : 1.5;
       ctx.stroke();
 
-      // Label
       ctx.font = `bold 15px ${FONT}`;
       ctx.fillStyle = rc;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(node.isHuman ? "YOU" : initials(node.agent.name), node.x, node.y - 9);
 
-      // Agent name — truncate to fit
       ctx.font = `11px ${FONT}`;
       ctx.fillStyle = "#CBD5E1";
       const maxW = NR * 1.7;
@@ -395,6 +460,24 @@ export default function SessionBuildClient() {
       }
       if (label !== node.agent.name) label += "…";
       ctx.fillText(label, node.x, node.y + 10);
+
+      // Builder badge (top-right of node)
+      if (node.isBuilder) {
+        const bx = node.x + NR * 0.68;
+        const by = node.y - NR * 0.68;
+        ctx.beginPath();
+        ctx.arc(bx, by, 9, 0, Math.PI * 2);
+        ctx.fillStyle = "#F59E0B";
+        ctx.fill();
+        ctx.strokeStyle = "#0B1120";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.font = `bold 8px ${FONT}`;
+        ctx.fillStyle = "#0B1120";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("B", bx, by + 0.5);
+      }
 
       // Role badge below node
       const badgeY = node.y + NR + 10;
@@ -414,8 +497,8 @@ export default function SessionBuildClient() {
       ctx.restore();
     }
 
-    ctx.restore(); // undo pan/zoom transform
-  }, [nodes, conns, hoveredNode, hoveredEdge, hoveredConn, linking, linkCursor, canvasW, canvasH, zoom, pan]);
+    ctx.restore();
+  }, [nodes, conns, clusters, hoveredNode, hoveredEdge, hoveredConn, hoveredCluster, editingClusterName, linking, linkCursor, canvasW, canvasH, zoom, pan]);
 
   // ── Canvas helpers ───────────────────────────────────────────────────────
 
@@ -459,6 +542,39 @@ export default function SessionBuildClient() {
     return null;
   }
 
+  function clusterHandleAt(x: number, y: number): { cluster: Cluster; handle: "n" | "s" | "e" | "w" } | null {
+    const hitR = Math.max(12, 12 / zoomRef.current);
+    for (let i = clustersRef.current.length - 1; i >= 0; i--) {
+      const c = clustersRef.current[i];
+      const handles = [
+        { handle: "n" as const, hx: c.x,        hy: c.y - c.ry },
+        { handle: "s" as const, hx: c.x,        hy: c.y + c.ry },
+        { handle: "e" as const, hx: c.x + c.rx, hy: c.y        },
+        { handle: "w" as const, hx: c.x - c.rx, hy: c.y        },
+      ];
+      for (const h of handles) {
+        if (dist2(x, y, h.hx, h.hy) <= hitR) return { cluster: c, handle: h.handle };
+      }
+    }
+    return null;
+  }
+
+  function clusterBodyAt(x: number, y: number): Cluster | null {
+    for (let i = clustersRef.current.length - 1; i >= 0; i--) {
+      if (isInsideEllipse(x, y, clustersRef.current[i])) return clustersRef.current[i];
+    }
+    return null;
+  }
+
+  function clusterLabelAt(x: number, y: number): Cluster | null {
+    for (let i = clustersRef.current.length - 1; i >= 0; i--) {
+      const c = clustersRef.current[i];
+      const labelY = c.y - c.ry + 22;
+      if (Math.abs(x - c.x) <= 65 && Math.abs(y - labelY) <= 14) return c;
+    }
+    return null;
+  }
+
   // ── Mouse handlers ───────────────────────────────────────────────────────
 
   function handleMouseDown(e: React.MouseEvent<HTMLDivElement>) {
@@ -467,6 +583,10 @@ export default function SessionBuildClient() {
     if (contextMenu) {
       setContextMenu(null);
       return;
+    }
+
+    if (editingClusterName) {
+      setEditingClusterName(null);
     }
 
     const pos = getPos(e);
@@ -509,10 +629,37 @@ export default function SessionBuildClient() {
       }
     }
 
-    // Start drag
+    // Nodes take priority over clusters
     const node = nodeAt(pos.x, pos.y);
     if (node) {
       draggingRef.current = { nodeId: node.id, ox: pos.x - node.x, oy: pos.y - node.y };
+      return;
+    }
+
+    // Cluster resize handle
+    const handleHit = clusterHandleAt(pos.x, pos.y);
+    if (handleHit) {
+      resizingClusterRef.current = { clusterId: handleHit.cluster.id, handle: handleHit.handle };
+      return;
+    }
+
+    // Cluster label → edit name
+    const labelCluster = clusterLabelAt(pos.x, pos.y);
+    if (labelCluster) {
+      setEditingClusterName(labelCluster.id);
+      return;
+    }
+
+    // Cluster body drag
+    const cluster = clusterBodyAt(pos.x, pos.y);
+    if (cluster) {
+      draggingClusterRef.current = {
+        clusterId: cluster.id,
+        ox: pos.x - cluster.x,
+        oy: pos.y - cluster.y,
+        prevX: cluster.x,
+        prevY: cluster.y,
+      };
     }
   }
 
@@ -527,6 +674,38 @@ export default function SessionBuildClient() {
       return;
     }
 
+    if (resizingClusterRef.current) {
+      const { clusterId, handle } = resizingClusterRef.current;
+      const MIN = 70;
+      setClusters((prev) => prev.map((c) => {
+        if (c.id !== clusterId) return c;
+        switch (handle) {
+          case "n": return { ...c, ry: Math.max(MIN, c.y - pos.y) };
+          case "s": return { ...c, ry: Math.max(MIN, pos.y - c.y) };
+          case "e": return { ...c, rx: Math.max(MIN, pos.x - c.x) };
+          case "w": return { ...c, rx: Math.max(MIN, c.x - pos.x) };
+        }
+      }));
+      return;
+    }
+
+    if (draggingClusterRef.current) {
+      const { clusterId, ox, oy, prevX, prevY } = draggingClusterRef.current;
+      const newX = pos.x - ox;
+      const newY = pos.y - oy;
+      const dx = newX - prevX;
+      const dy = newY - prevY;
+      setClusters((prev) => prev.map((c) =>
+        c.id === clusterId ? { ...c, x: newX, y: newY } : c,
+      ));
+      setNodes((prev) => prev.map((n) =>
+        n.clusterId === clusterId ? { ...n, x: n.x + dx, y: n.y + dy } : n,
+      ));
+      draggingClusterRef.current.prevX = newX;
+      draggingClusterRef.current.prevY = newY;
+      return;
+    }
+
     setLinkCursor(pos);
 
     const node = nodeAt(pos.x, pos.y);
@@ -535,16 +714,35 @@ export default function SessionBuildClient() {
     if (node) {
       setHoveredEdge(null);
       setHoveredConn(null);
+      setHoveredCluster(null);
     } else {
       if (!linkingRef.current) {
         setHoveredEdge(edgeNodeAt(pos.x, pos.y)?.id ?? null);
       }
       setHoveredConn(connAt(pos.x, pos.y)?.id ?? null);
+      const hc = clusterHandleAt(pos.x, pos.y)?.cluster ?? clusterBodyAt(pos.x, pos.y);
+      setHoveredCluster(hc?.id ?? null);
     }
   }
 
   function handleMouseUp() {
+    // Assign dragged node to cluster on drop
+    if (draggingRef.current) {
+      const nodeId = draggingRef.current.nodeId;
+      const node = nodesRef.current.find((n) => n.id === nodeId);
+      if (node) {
+        let foundId: string | undefined;
+        for (const c of clustersRef.current) {
+          if (isInsideEllipse(node.x, node.y, c)) { foundId = c.id; break; }
+        }
+        if (node.clusterId !== foundId) {
+          setNodes((prev) => prev.map((n) => n.id === nodeId ? { ...n, clusterId: foundId } : n));
+        }
+      }
+    }
     draggingRef.current = null;
+    draggingClusterRef.current = null;
+    resizingClusterRef.current = null;
   }
 
   function handleContextMenu(e: React.MouseEvent<HTMLDivElement>) {
@@ -570,6 +768,30 @@ export default function SessionBuildClient() {
     setNodes((prev) => prev.filter((n) => n.id !== nodeId));
     setConns((prev) => prev.filter((c) => c.fromId !== nodeId && c.toId !== nodeId));
     setContextMenu(null);
+  }
+
+  function toggleBuilder(nodeId: string) {
+    setNodes((prev) => prev.map((n) => n.id === nodeId ? { ...n, isBuilder: !n.isBuilder } : n));
+    setContextMenu(null);
+  }
+
+  function removeFromCluster(nodeId: string) {
+    setNodes((prev) => prev.map((n) => n.id === nodeId ? { ...n, clusterId: undefined } : n));
+    setContextMenu(null);
+  }
+
+  // ── Cluster creation ─────────────────────────────────────────────────────
+
+  function createCluster() {
+    const idx = clustersRef.current.length;
+    const color = CLUSTER_COLORS[idx % CLUSTER_COLORS.length];
+    const name = CLUSTER_NAMES[idx] ?? `Team ${idx + 1}`;
+    const cx = (-panRef.current.x + canvasW / 2) / zoomRef.current + (Math.random() - 0.5) * 160;
+    const cy = (-panRef.current.y + canvasH / 2) / zoomRef.current + (Math.random() - 0.5) * 80;
+    setClusters((prev) => [
+      ...prev,
+      { id: `cluster-${Date.now()}`, name, x: cx, y: cy, rx: 155, ry: 115, color, subTask: "" },
+    ]);
   }
 
   // ── Agent picker ─────────────────────────────────────────────────────────
@@ -609,7 +831,6 @@ export default function SessionBuildClient() {
 
   // ── Zoom helpers ─────────────────────────────────────────────────────────
 
-  // Non-passive wheel handler so we can call e.preventDefault()
   useEffect(() => {
     const canvas = containerRef.current;
     if (!canvas) return;
@@ -620,7 +841,6 @@ export default function SessionBuildClient() {
       const sy = e.clientY - r.top;
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
       const newZoom = Math.min(3, Math.max(0.3, zoomRef.current * factor));
-      // Keep the world point under the cursor fixed after zoom change
       const newPanX = sx - ((sx - panRef.current.x) / zoomRef.current) * newZoom;
       const newPanY = sy - ((sy - panRef.current.y) / zoomRef.current) * newZoom;
       setZoom(newZoom);
@@ -707,8 +927,22 @@ export default function SessionBuildClient() {
             x: n.x,
             y: n.y,
             isHuman: n.isHuman ?? false,
+            clusterId: n.clusterId ?? null,
+            isBuilder: n.isBuilder ?? false,
           })),
           edges: conns.map((c) => ({ a: c.fromId, b: c.toId })),
+          clusters: clusters.map((c) => ({
+            id: c.id,
+            name: c.name,
+            color: c.color,
+            subTask: c.subTask,
+            x: c.x,
+            y: c.y,
+            rx: c.rx,
+            ry: c.ry,
+            agentIds: nodes.filter((n) => n.clusterId === c.id).map((n) => n.id),
+            builderIds: nodes.filter((n) => n.clusterId === c.id && n.isBuilder).map((n) => n.id),
+          })),
         }),
       );
 
@@ -719,14 +953,33 @@ export default function SessionBuildClient() {
     }
   }
 
+  // ── Keyboard ─────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setLinking(null);
+        setLinkCursor(null);
+        setContextMenu(null);
+        setShowPicker(false);
+        setEditingClusterName(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // ── Cursor ───────────────────────────────────────────────────────────────
 
   let cursor = "default";
   if (draggingRef.current) cursor = "grabbing";
+  else if (resizingClusterRef.current) cursor = "nwse-resize";
+  else if (draggingClusterRef.current) cursor = "grabbing";
   else if (linking) cursor = "crosshair";
   else if (hoveredNode) cursor = "grab";
   else if (hoveredEdge) cursor = "crosshair";
   else if (hoveredConn) cursor = "pointer";
+  else if (hoveredCluster) cursor = "grab";
 
   // ── Picker agents ────────────────────────────────────────────────────────
 
@@ -739,21 +992,6 @@ export default function SessionBuildClient() {
       a.skills.some((s) => s.toLowerCase().includes(q))
     );
   });
-
-  // ── Keyboard ─────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setLinking(null);
-        setLinkCursor(null);
-        setContextMenu(null);
-        setShowPicker(false);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -825,8 +1063,41 @@ export default function SessionBuildClient() {
             style={{ display: "block", pointerEvents: "none" }}
           />
 
+          {/* Cluster name editing input overlay */}
+          {editingClusterName && (() => {
+            const cluster = clusters.find((c) => c.id === editingClusterName);
+            if (!cluster) return null;
+            const sx = cluster.x * zoom + pan.x;
+            const sy = (cluster.y - cluster.ry + 22) * zoom + pan.y;
+            return (
+              <input
+                autoFocus
+                value={cluster.name}
+                onChange={(e) =>
+                  setClusters((prev) =>
+                    prev.map((c) => c.id === editingClusterName ? { ...c, name: e.target.value } : c),
+                  )
+                }
+                onBlur={() => setEditingClusterName(null)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur();
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute",
+                  left: sx,
+                  top: sy,
+                  transform: "translate(-50%, -50%)",
+                  width: `${Math.max(110, 130 * zoom)}px`,
+                  fontSize: `${Math.round(Math.max(11, 13 * zoom))}px`,
+                }}
+                className="bg-al-surface border border-al-accent rounded-md px-2 py-0.5 text-al-accent font-semibold text-center focus:outline-none z-50 pointer-events-auto"
+              />
+            );
+          })()}
+
           {/* Empty state */}
-          {nodes.length === 0 && (
+          {nodes.length === 0 && clusters.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none">
               <div className="w-16 h-16 rounded-full border-2 border-dashed border-al-border flex items-center justify-center mb-4">
                 <svg className="w-6 h-6 text-al-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -848,7 +1119,7 @@ export default function SessionBuildClient() {
             </div>
           )}
 
-          {/* Bottom bar: add controls + zoom */}
+          {/* Bottom bar: controls + zoom */}
           <div className="absolute bottom-2 left-2 flex items-center gap-2 z-10">
             <button
               onClick={() => setShowPicker(true)}
@@ -873,6 +1144,16 @@ export default function SessionBuildClient() {
                 <path strokeLinecap="round" strokeWidth={1.5} d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-5 6a5 5 0 0 1 10 0" />
               </svg>
               Add me as human
+            </button>
+            <button
+              onClick={createCluster}
+              className="flex items-center gap-2 px-3.5 py-2 bg-al-surface border border-al-border rounded-xl text-sm text-al-text hover:border-al-accent/60 hover:text-al-accent transition-all shadow-lg"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                <ellipse cx="8" cy="8" rx="6" ry="4" strokeWidth="1.5" />
+                <path strokeLinecap="round" strokeWidth={1.5} d="M8 5v6M5 8h6" />
+              </svg>
+              Create team
             </button>
             <div className="ml-2 flex items-center gap-0.5 bg-al-surface border border-al-border rounded-xl shadow-lg px-1.5 py-1">
               <button
@@ -901,7 +1182,7 @@ export default function SessionBuildClient() {
             if (!node) return null;
             return (
               <div
-                className="fixed z-50 bg-al-surface border border-al-border rounded-xl shadow-2xl py-1 min-w-[168px]"
+                className="fixed z-50 bg-al-surface border border-al-border rounded-xl shadow-2xl py-1 min-w-[172px]"
                 style={{ left: contextMenu.x, top: contextMenu.y }}
                 onMouseDown={(e) => e.stopPropagation()}
               >
@@ -929,6 +1210,36 @@ export default function SessionBuildClient() {
                   </button>
                 ))}
                 <div className="border-t border-al-border mt-1 pt-1">
+                  {/* Builder toggle */}
+                  <button
+                    onClick={() => toggleBuilder(contextMenu.nodeId)}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-al-text hover:bg-al-border/30 transition-colors"
+                  >
+                    <span className="w-3.5 h-3.5 rounded-full bg-[#F59E0B] text-[#0B1120] text-[8px] font-bold flex items-center justify-center flex-shrink-0">
+                      B
+                    </span>
+                    <span className={node.isBuilder ? "text-[#F59E0B]" : "text-al-text"}>
+                      {node.isBuilder ? "Remove Builder" : "Set as Builder"}
+                    </span>
+                    {node.isBuilder && (
+                      <svg className="w-3 h-3 ml-auto text-[#F59E0B]" fill="none" viewBox="0 0 12 12" stroke="currentColor">
+                        <path strokeLinecap="round" strokeWidth={1.5} d="M2 6l3 3 5-5" />
+                      </svg>
+                    )}
+                  </button>
+                  {/* Remove from team */}
+                  {node.clusterId && (
+                    <button
+                      onClick={() => removeFromCluster(contextMenu.nodeId)}
+                      className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-al-text hover:bg-al-border/30 transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5 text-al-muted flex-shrink-0" fill="none" viewBox="0 0 14 14" stroke="currentColor">
+                        <circle cx="7" cy="7" r="5" strokeWidth="1.5" />
+                        <path d="M4 7h6" strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                      Remove from team
+                    </button>
+                  )}
                   <button
                     onClick={() => startLink(contextMenu.nodeId)}
                     className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-al-text hover:bg-al-border/30 transition-colors"
@@ -1018,7 +1329,6 @@ export default function SessionBuildClient() {
 
         {/* ── Contract panel ── */}
         <aside className="w-80 flex-shrink-0 border-l border-al-border flex flex-col overflow-hidden bg-al-surface">
-          {/* Panel header */}
           <div className="px-4 pt-4 pb-3 border-b border-al-border flex-shrink-0">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-al-accent" />
@@ -1050,9 +1360,7 @@ export default function SessionBuildClient() {
                   onClick={() => setRulesExpanded((v) => !v)}
                   className="text-[11px] text-al-accent hover:underline transition-colors"
                 >
-                  {rulesExpanded
-                    ? "Show less"
-                    : `Read more (${AL_RULES.length - 2} more rules)`}
+                  {rulesExpanded ? "Show less" : `Read more (${AL_RULES.length - 2} more rules)`}
                 </button>
               </div>
             </section>
@@ -1069,34 +1377,110 @@ export default function SessionBuildClient() {
               </div>
 
               <div className="space-y-3">
-                {/* Participants */}
+                {/* Participants — grouped by cluster */}
                 {nodes.length > 0 && (
                   <div className="bg-al-bg border border-al-border rounded-xl p-3">
                     <div className="text-[10px] text-al-muted uppercase tracking-wider mb-2">
                       Participants ({nodes.length})
                     </div>
-                    <div className="space-y-1.5">
-                      {nodes.map((n) => {
-                        const rc = n.isHuman ? HUMAN_COLOR : ROLE_COLOR[n.role];
-                        return (
-                          <div key={n.id} className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <div
-                                className={`w-1.5 h-1.5 flex-shrink-0 ${n.isHuman ? "rotate-45" : "rounded-full"}`}
-                                style={{ background: rc }}
-                              />
-                              <span className="text-xs text-al-text truncate">{n.agent.name}</span>
-                            </div>
-                            <span
-                              className="text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0"
-                              style={{ color: rc, background: `${rc}18` }}
-                            >
-                              {n.role}
+
+                    {/* Cluster groups */}
+                    {clusters.map((cluster) => {
+                      const clusterNodes = nodes.filter((n) => n.clusterId === cluster.id);
+                      if (clusterNodes.length === 0) return null;
+                      return (
+                        <div key={cluster.id} className="mb-3">
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: cluster.color }} />
+                            <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: cluster.color }}>
+                              {cluster.name}
                             </span>
                           </div>
-                        );
-                      })}
-                    </div>
+                          <div className="space-y-1.5 pl-3.5 mb-1.5">
+                            {clusterNodes.map((n) => {
+                              const rc = n.isHuman ? HUMAN_COLOR : ROLE_COLOR[n.role];
+                              return (
+                                <div key={n.id} className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <div
+                                      className={`w-1.5 h-1.5 flex-shrink-0 ${n.isHuman ? "rotate-45" : "rounded-full"}`}
+                                      style={{ background: rc }}
+                                    />
+                                    <span className="text-xs text-al-text truncate">{n.agent.name}</span>
+                                    {n.isBuilder && (
+                                      <span className="text-[7px] font-bold bg-[#F59E0B] text-[#0B1120] rounded-full w-3.5 h-3.5 flex items-center justify-center flex-shrink-0">
+                                        B
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span
+                                    className="text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0"
+                                    style={{ color: rc, background: `${rc}18` }}
+                                  >
+                                    {n.isBuilder ? `${n.role}, Builder` : n.role}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {/* Sub-task per cluster */}
+                          <div className="pl-3.5">
+                            <input
+                              value={cluster.subTask}
+                              onChange={(e) =>
+                                setClusters((prev) =>
+                                  prev.map((c) => c.id === cluster.id ? { ...c, subTask: e.target.value } : c),
+                                )
+                              }
+                              placeholder={`${cluster.name} sub-task…`}
+                              className="w-full bg-al-surface border border-al-border rounded-lg px-2.5 py-1 text-[11px] text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Unassigned agents */}
+                    {(() => {
+                      const unassigned = nodes.filter((n) => !n.clusterId);
+                      if (unassigned.length === 0) return null;
+                      return (
+                        <div className={clusters.some((c) => nodes.some((n) => n.clusterId === c.id)) ? "mt-2 pt-2 border-t border-al-border" : ""}>
+                          {clusters.length > 0 && (
+                            <div className="text-[10px] text-al-muted uppercase tracking-wider mb-1.5">
+                              Unassigned
+                            </div>
+                          )}
+                          <div className="space-y-1.5">
+                            {unassigned.map((n) => {
+                              const rc = n.isHuman ? HUMAN_COLOR : ROLE_COLOR[n.role];
+                              return (
+                                <div key={n.id} className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <div
+                                      className={`w-1.5 h-1.5 flex-shrink-0 ${n.isHuman ? "rotate-45" : "rounded-full"}`}
+                                      style={{ background: rc }}
+                                    />
+                                    <span className="text-xs text-al-text truncate">{n.agent.name}</span>
+                                    {n.isBuilder && (
+                                      <span className="text-[7px] font-bold bg-[#F59E0B] text-[#0B1120] rounded-full w-3.5 h-3.5 flex items-center justify-center flex-shrink-0">
+                                        B
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span
+                                    className="text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0"
+                                    style={{ color: rc, background: `${rc}18` }}
+                                  >
+                                    {n.isBuilder ? `${n.role}, Builder` : n.role}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -1157,18 +1541,14 @@ export default function SessionBuildClient() {
                       value={clause.value}
                       onChange={(e) =>
                         setCustomClauses((prev) =>
-                          prev.map((c) =>
-                            c.id === clause.id ? { ...c, value: e.target.value } : c,
-                          ),
+                          prev.map((c) => c.id === clause.id ? { ...c, value: e.target.value } : c),
                         )
                       }
                       placeholder={`Custom clause ${i + 1}…`}
                       className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
                     />
                     <button
-                      onClick={() =>
-                        setCustomClauses((prev) => prev.filter((c) => c.id !== clause.id))
-                      }
+                      onClick={() => setCustomClauses((prev) => prev.filter((c) => c.id !== clause.id))}
                       className="mt-0.5 w-7 h-7 flex items-center justify-center rounded border border-al-border text-al-muted hover:text-red-400 hover:border-red-400/40 transition-colors flex-shrink-0"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor">
@@ -1178,7 +1558,6 @@ export default function SessionBuildClient() {
                   </div>
                 ))}
 
-                {/* Add clause */}
                 <button
                   onClick={() =>
                     setCustomClauses((prev) => [

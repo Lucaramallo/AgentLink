@@ -7,7 +7,7 @@ import type { SessionRole } from "../../lib/types";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const API = "http://192.168.0.113:8000/api/v1";
+const API = "http://192.168.0.114:8000/api/v1";
 const NR  = 40;
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
@@ -68,11 +68,23 @@ interface GraphNode {
   label: string;
   role: SessionRole;
   isHuman?: boolean;
+  isBuilder?: boolean;
+  clusterId?: string;
 }
 
 interface GraphEdge {
   fromId: string;
   toId: string;
+}
+
+interface GraphCluster {
+  id: string;
+  name: string;
+  color: string;
+  x: number;
+  y: number;
+  rx: number;
+  ry: number;
 }
 
 interface Message {
@@ -166,6 +178,7 @@ export default function SessionRoomClient() {
   // Graph
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [graphClusters, setGraphClusters] = useState<GraphCluster[]>([]);
   const graphNodesRef = useRef<GraphNode[]>([]);
 
   // Chat
@@ -197,6 +210,12 @@ export default function SessionRoomClient() {
   const [demoLimitReached, setDemoLimitReached]   = useState(false);
   const [messagesRemaining, setMessagesRemaining] = useState<number | null>(null);
 
+  // Chat tabs
+  const [activeTab, setActiveTab]           = useState<string>("all");
+  const [unreadClusters, setUnreadClusters] = useState<Set<string>>(new Set());
+  const activeTabRef = useRef("all");
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+
   // Stable refs so async callbacks always see latest graph state
   const graphEdgesRef = useRef<GraphEdge[]>([]);
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
@@ -212,8 +231,9 @@ export default function SessionRoomClient() {
     sessionStorage.removeItem("agentlink_session_graph");
     try {
       const saved = JSON.parse(raw) as {
-        nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean }>;
+        nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean; clusterId?: string | null; isBuilder?: boolean }>;
         edges: Array<{ a: string; b: string }>;
+        clusters?: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number }>;
       };
       const restoredNodes: GraphNode[] = saved.nodes.map((n) => ({
         id: n.id,
@@ -222,13 +242,19 @@ export default function SessionRoomClient() {
         label: n.agentName,
         role: n.role,
         isHuman: n.isHuman,
+        isBuilder: n.isBuilder ?? false,
+        clusterId: n.clusterId ?? undefined,
       }));
       const restoredEdges: GraphEdge[] = saved.edges.map((e) => ({
         fromId: e.a,
         toId: e.b,
       }));
+      const restoredClusters: GraphCluster[] = (saved.clusters ?? [])
+        .filter((c) => c.x !== undefined && c.rx !== undefined)
+        .map((c) => ({ id: c.id, name: c.name, color: c.color, x: c.x, y: c.y, rx: c.rx, ry: c.ry }));
       setGraphNodes(restoredNodes);
       setGraphEdges(restoredEdges);
+      setGraphClusters(restoredClusters);
       setParticipantCount(restoredNodes.length);
       savedGraphLoadedRef.current = true;
     } catch { /* malformed — fall back to API */ }
@@ -294,7 +320,44 @@ export default function SessionRoomClient() {
       }
     }
 
-    // Edges
+    // Clusters (behind nodes)
+    for (const c of graphClusters) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `${c.color}1a`;
+      ctx.fill();
+      ctx.strokeStyle = `${c.color}55`;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([10, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = `bold 13px ${FONT}`;
+      ctx.fillStyle = `${c.color}bb`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(c.name, c.x, c.y - c.ry + 22);
+      ctx.restore();
+    }
+
+    // Intra-cluster edges — full mesh within each cluster
+    for (const c of graphClusters) {
+      const cn = graphNodes.filter((n) => n.clusterId === c.id);
+      for (let i = 0; i < cn.length; i++) {
+        for (let j = i + 1; j < cn.length; j++) {
+          ctx.beginPath();
+          ctx.moveTo(cn[i].x, cn[i].y);
+          ctx.lineTo(cn[j].x, cn[j].y);
+          ctx.strokeStyle = `${c.color}44`;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 5]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+    }
+
+    // Inter-agent edges (user-defined)
     for (const edge of graphEdges) {
       const from = graphNodes.find((n) => n.id === edge.fromId);
       const to   = graphNodes.find((n) => n.id === edge.toId);
@@ -351,6 +414,24 @@ export default function SessionRoomClient() {
       if (nameLabel !== node.label) nameLabel += "…";
       ctx.fillText(nameLabel, node.x, node.y + 9);
 
+      // Builder badge (top-right of node)
+      if (node.isBuilder) {
+        const bx = node.x + NR * 0.68;
+        const by = node.y - NR * 0.68;
+        ctx.beginPath();
+        ctx.arc(bx, by, 9, 0, Math.PI * 2);
+        ctx.fillStyle = "#F59E0B";
+        ctx.fill();
+        ctx.strokeStyle = "#0B1120";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.font = `bold 8px ${FONT}`;
+        ctx.fillStyle = "#0B1120";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("B", bx, by + 0.5);
+      }
+
       const badgeY = node.y + NR + 11;
       ctx.font = `bold 8px ${FONT}`;
       const bw = ctx.measureText(node.role.toUpperCase()).width + 12;
@@ -369,7 +450,7 @@ export default function SessionRoomClient() {
     }
 
     ctx.restore();
-  }, [graphNodes, graphEdges, canvasW, canvasH]);
+  }, [graphNodes, graphEdges, graphClusters, canvasW, canvasH]);
 
   // ── Auto-scroll ──────────────────────────────────────────────────────────
 
@@ -382,6 +463,19 @@ export default function SessionRoomClient() {
   useEffect(() => {
     if (messages.some((m) => m.type === "DELIVERABLE")) setHasDeliverable(true);
   }, [messages]);
+
+  // ── Track unread messages per cluster ────────────────────────────────────
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.isHuman || lastMsg.agentId === "system") return;
+    const node = graphNodesRef.current.find((n) => n.id === lastMsg.agentId);
+    if (!node?.clusterId) return;
+    const tab = activeTabRef.current;
+    if (tab === "all" || tab === node.clusterId) return;
+    setUnreadClusters((prev) => new Set([...prev, node.clusterId!]));
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-send task_description on WS connect ─────────────────────────────
 
@@ -477,7 +571,7 @@ export default function SessionRoomClient() {
     let ws: WebSocket;
 
     try {
-      ws = new WebSocket(`ws://192.168.0.113:8000/ws/rooms/${roomId}`);
+      ws = new WebSocket(`ws://192.168.0.114:8000/ws/rooms/${roomId}`);
       wsRef.current = ws;
     } catch {
       return;
@@ -545,20 +639,35 @@ export default function SessionRoomClient() {
       setMessages((prev) => [...prev, msg]);
     }
 
-    function getVisibleContext(agent: GraphNode, context: Message[]): Message[] {
+    function getVisibleContext(agent: GraphNode, context: Message[], round?: string): Message[] {
       const edges = graphEdgesRef.current;
+      // No edges defined → every agent sees all messages (full mesh)
+      if (edges.length === 0) {
+        if (round) console.log(`[${round}] ${agent.label}: no edges → full context (${context.length} msgs)`);
+        return context;
+      }
       const neighborIds = new Set(
         edges
           .filter((e) => e.fromId === agent.id || e.toId === agent.id)
           .map((e) => (e.fromId === agent.id ? e.toId : e.fromId)),
       );
-      return context.filter(
+      // Agent has no edges → fall back to full visibility so R2 context is never empty
+      if (neighborIds.size === 0) {
+        if (round) console.log(`[${round}] ${agent.label}: isolated node → full context (${context.length} msgs)`);
+        return context;
+      }
+      const visible = context.filter(
         (m) =>
           m.isHuman ||
           m.agentId === "system" ||
           m.agentId === agent.id ||
           neighborIds.has(m.agentId),
       );
+      if (round) {
+        const peerMsgs = visible.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
+        console.log(`[${round}] ${agent.label}: neighbors=[${[...neighborIds].join(",")}] peer_msgs=${peerMsgs.length} total=${visible.length}`);
+      }
+      return visible;
     }
 
     async function callAgent(
@@ -615,7 +724,7 @@ export default function SessionRoomClient() {
     const r1Prompt =
       `${humanText}\n\nRound 1: Provide your independent expert analysis. Do not hold back your perspective.`;
     const r1Results = await Promise.all(
-      agents.map((agent) => callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages), "R1")),
+      agents.map((agent) => callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages, "R1"), "R1")),
     );
     const r1Messages = r1Results.filter((m): m is Message => m !== null);
     if (r1Messages.length === 0) return;
@@ -627,7 +736,7 @@ export default function SessionRoomClient() {
     const r2Base = [...sessionMessages, ...r1Messages];
     const r2Messages: Message[] = [];
     for (const agent of agents) {
-      const msg = await callAgent(agent, r2Prompt, getVisibleContext(agent, [...r2Base, ...r2Messages]), "R2");
+      const msg = await callAgent(agent, r2Prompt, getVisibleContext(agent, [...r2Base, ...r2Messages], "R2"), "R2");
       if (!msg) continue;
       r2Messages.push(msg);
     }
@@ -644,7 +753,7 @@ export default function SessionRoomClient() {
       const prompt = isLast
         ? `${r3Prompt} You are the last agent — synthesize all contributions into one cohesive final document.`
         : r3Prompt;
-      const msg = await callAgent(agent, prompt, getVisibleContext(agent, r3Base), isLast ? "DELIVERABLE" : "R3");
+      const msg = await callAgent(agent, prompt, getVisibleContext(agent, r3Base, "R3"), isLast ? "DELIVERABLE" : "R3");
       if (msg) r3Base.push(msg);
     }
   }
@@ -783,6 +892,22 @@ export default function SessionRoomClient() {
   const step      = STATUS_STEP[status];
   const agentNodes = graphNodes.filter((n) => !n.isHuman);
 
+  // Build nodeId → cluster lookup for team badges and tab filtering
+  const clusterByNodeId = new Map<string, GraphCluster>(
+    graphNodes
+      .filter((n) => n.clusterId)
+      .flatMap((n) => {
+        const c = graphClusters.find((c) => c.id === n.clusterId);
+        return c ? [[n.id, c] as [string, GraphCluster]] : [];
+      }),
+  );
+
+  const visibleMessages = activeTab === "all"
+    ? messages
+    : messages.filter(
+        (m) => m.isHuman || m.agentId === "system" || clusterByNodeId.get(m.agentId)?.id === activeTab,
+      );
+
   return (
     <div className="h-screen flex flex-col bg-al-bg text-al-text overflow-hidden">
 
@@ -879,6 +1004,52 @@ export default function SessionRoomClient() {
             )}
           </div>
 
+          {/* Team tabs — only shown when clusters exist */}
+          {graphClusters.length > 0 && (
+            <div className="shrink-0 flex items-center border-b border-al-border bg-al-surface px-2 overflow-x-auto">
+              {/* All tab */}
+              <button
+                onClick={() => setActiveTab("all")}
+                className="relative px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors shrink-0"
+                style={{ color: activeTab === "all" ? "#4ECDC4" : "#64748B" }}
+              >
+                All
+                {activeTab === "all" && (
+                  <span className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full bg-[#4ECDC4]" />
+                )}
+              </button>
+              {graphClusters.map((cluster) => (
+                <button
+                  key={cluster.id}
+                  onClick={() => {
+                    setActiveTab(cluster.id);
+                    setUnreadClusters((prev) => {
+                      const next = new Set(prev);
+                      next.delete(cluster.id);
+                      return next;
+                    });
+                  }}
+                  className="relative px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors shrink-0 flex items-center gap-1.5"
+                  style={{ color: activeTab === cluster.id ? cluster.color : "#64748B" }}
+                >
+                  {cluster.name}
+                  {unreadClusters.has(cluster.id) && (
+                    <span
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ background: cluster.color }}
+                    />
+                  )}
+                  {activeTab === cluster.id && (
+                    <span
+                      className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full"
+                      style={{ background: cluster.color }}
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
             {messages.length === 0 && (
@@ -893,8 +1064,8 @@ export default function SessionRoomClient() {
                 <p className="text-xs mt-1">Send a message to start the session</p>
               </div>
             )}
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} />
+            {visibleMessages.map((msg) => (
+              <MessageBubble key={msg.id} msg={msg} cluster={clusterByNodeId.get(msg.agentId)} />
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -1020,7 +1191,7 @@ function StatusBadge({ status }: { status: SessionStatus }) {
   );
 }
 
-function MessageBubble({ msg }: { msg: Message }) {
+function MessageBubble({ msg, cluster }: { msg: Message; cluster?: GraphCluster }) {
   const rc  = msg.isHuman ? HUMAN_COLOR : (ROLE_COLOR[msg.role] ?? "#64748B");
   const mtc = MSG_COLOR[msg.type];
   const ini = msg.isHuman ? "YOU" : initials(msg.agentName);
@@ -1036,6 +1207,18 @@ function MessageBubble({ msg }: { msg: Message }) {
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
           <span className="text-sm font-semibold text-al-text">{msg.agentName}</span>
+          {cluster && !msg.isHuman && (
+            <span
+              className="text-[10px] font-semibold rounded px-1.5 py-0.5 leading-none"
+              style={{
+                background: `${cluster.color}22`,
+                color: cluster.color,
+                border: `1px solid ${cluster.color}44`,
+              }}
+            >
+              {cluster.name}
+            </span>
+          )}
           {msg.agentOrg && (
             <span className="text-[10px] text-al-muted bg-al-surface border border-al-border rounded px-1.5 py-0.5 leading-none">
               {msg.agentOrg}
