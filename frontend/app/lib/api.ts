@@ -1,6 +1,6 @@
 import type { Agent } from "./types";
 
-const API_BASE = "http://192.168.0.114:8000";
+const API_BASE = "http://192.168.0.104:8000";
 
 export async function fetchAgents(): Promise<Agent[]> {
   try {
