@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.database import get_db
+from app.models.agent import Agent
 from app.models.reputation import FeedbackRelational, FeedbackTechnical
 from app.services.reputation import calculate_relational_reputation, calculate_technical_reputation
 
@@ -78,14 +79,19 @@ async def submit_relational_feedback(
 
 
 @router.post("/session-update")
-async def session_reputation_update(payload: SessionUpdateRequest) -> dict:
-    """Compute final reputation scores for all agents after a session closes."""
+async def session_reputation_update(
+    payload: SessionUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Compute and persist final reputation scores for all agents after a session closes."""
     total_messages = sum(payload.session_stats.values()) or 1
     team_rating: float = payload.human_scores.get("team", 0)
     individual: dict[str, float] = payload.human_scores.get("individual", {})
     has_human = team_rating > 0
 
-    peer_w = 0.35 if has_human else 0.55
+    # peer_review 35%, human_rating 30%, messages 20%, role 15%
+    # If no human rating, redistribute 30% to peer_review → 65%
+    peer_w = 0.35 if has_human else 0.65
     human_w = 0.30 if has_human else 0.0
     msg_w = 0.20
     role_w = 0.15
@@ -94,6 +100,16 @@ async def session_reputation_update(payload: SessionUpdateRequest) -> dict:
         "Builder": 1.15, "Reviewer": 1.10, "Requester": 1.05,
         "Contributor": 1.0, "Observer": 0.9,
     }
+
+    def _rolling_avg(old: float | None, n: int, new_score: float) -> float:
+        """Rolling weighted average (linear weights, last 50 sessions)."""
+        if old is None or n == 0:
+            return round(max(1.0, min(5.0, new_score)), 2)
+        if n < 50:
+            updated = (old * n + 2 * new_score) / (n + 2)
+        else:
+            updated = old * (49 / 51) + new_score * (2 / 51)
+        return round(max(1.0, min(5.0, updated)), 2)
 
     results: dict[str, dict] = {}
     for agent in payload.agents:
@@ -118,9 +134,40 @@ async def session_reputation_update(payload: SessionUpdateRequest) -> dict:
             + role_score * role_w
         )
         final = max(1.0, min(5.0, round(final, 2)))
+
+        # Resolve agent in DB: try UUID first, then name lookup
+        agent_row: Agent | None = None
+        try:
+            agent_row = await db.get(Agent, uuid.UUID(aid))
+        except ValueError:
+            pass
+        if agent_row is None and agent.name:
+            res = await db.execute(select(Agent).where(Agent.name == agent.name))
+            agent_row = res.scalar_one_or_none()
+
+        delta: float | None = None
+        if agent_row is not None:
+            n = agent_row.total_jobs_completed
+            old_tech = agent_row.reputation_technical
+
+            new_tech = _rolling_avg(old_tech, n, final)
+            new_rel = (
+                _rolling_avg(agent_row.reputation_relational, n, human_score)
+                if has_human
+                else agent_row.reputation_relational
+            )
+
+            delta = round(new_tech - old_tech, 2) if old_tech is not None else None
+
+            agent_row.reputation_technical = new_tech
+            agent_row.reputation_relational = new_rel
+            agent_row.total_jobs_completed = n + 1
+            db.add(agent_row)
+
         results[aid] = {
             "agent_name": agent.name,
             "final_score": final,
+            "delta": delta,
             "breakdown": {
                 "peer_review": round(peer_score * peer_w, 2),
                 "human_rating": round(human_score * human_w, 2),
@@ -129,6 +176,7 @@ async def session_reputation_update(payload: SessionUpdateRequest) -> dict:
             },
         }
 
+    await db.flush()
     return {"room_id": payload.room_id, "reputation_updates": results}
 
 

@@ -279,6 +279,18 @@ interface PeerReviewData {
   weighted_averages: Record<string, number>;
 }
 
+interface ReputationUpdate {
+  agent_name: string;
+  final_score: number;
+  delta: number | null;
+  breakdown: {
+    peer_review: number;
+    human_rating: number;
+    messages_contributed: number;
+    role_weight: number;
+  };
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function SessionRoomClient() {
@@ -322,6 +334,7 @@ export default function SessionRoomClient() {
   const [teamRating, setTeamRating]               = useState(0);
   const [individualRatings, setIndividualRatings] = useState<Record<string, number>>({});
   const [ratingSubmitting, setRatingSubmitting]   = useState(false);
+  const [reputationUpdates, setReputationUpdates] = useState<Record<string, ReputationUpdate> | null>(null);
 
   // WS
   const wsRef   = useRef<WebSocket | null>(null);
@@ -1045,7 +1058,7 @@ export default function SessionRoomClient() {
       ).length;
     }
     try {
-      await fetch(`${API}/reputation/session-update`, {
+      const res = await fetch(`${API}/reputation/session-update`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1056,6 +1069,10 @@ export default function SessionRoomClient() {
           session_stats,
         }),
       });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.reputation_updates) setReputationUpdates(data.reputation_updates);
+      }
     } catch { /* proceed regardless */ }
     setRatingSubmitting(false);
     setShowRatingScreen(false);
@@ -1522,6 +1539,7 @@ export default function SessionRoomClient() {
           refundAmount={refundAmount}
           deliverable={deliverableMsg}
           deliverableExt={deliverableExt}
+          reputationUpdates={reputationUpdates}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
@@ -1927,6 +1945,7 @@ function CloseModal({
   refundAmount,
   deliverable,
   deliverableExt = "md",
+  reputationUpdates,
   onDownloadDeliverable,
   onDownload,
   onClose,
@@ -1943,6 +1962,7 @@ function CloseModal({
   refundAmount?: number | null;
   deliverable?: Message | null;
   deliverableExt?: string;
+  reputationUpdates?: Record<string, ReputationUpdate> | null;
   onDownloadDeliverable?: (msg: Message) => void;
   onDownload: () => void;
   onClose: () => void;
@@ -2003,22 +2023,37 @@ function CloseModal({
           </p>
         </div>
 
-        {/* Reputation updates derived from actual session agents */}
+        {/* Reputation updates — real per-agent deltas when available */}
         {agents.length > 0 && (
           <div className="bg-al-bg rounded-xl border border-al-border p-4 mb-4">
             <p className="text-[10px] text-al-muted uppercase tracking-wider mb-3">Reputation Updates</p>
-            <div className="space-y-2">
-              {agents.map((agent) => (
-                <div key={agent.id} className="flex items-center justify-between">
-                  <span className="text-sm text-al-text">{agent.label}</span>
-                  <span
-                    className="text-sm font-semibold tabular-nums"
-                    style={{ color: isSuccess ? "#22C55E" : "#EF4444" }}
-                  >
-                    {isSuccess ? "+0.10" : "-0.10"}
-                  </span>
-                </div>
-              ))}
+            <div className="space-y-3">
+              {agents.map((agent) => {
+                const upd = reputationUpdates?.[agent.id];
+                const score = upd?.final_score ?? null;
+                const scoreColor = score === null
+                  ? (isSuccess ? "#22C55E" : "#EF4444")
+                  : score > 3.5 ? "#22C55E" : score >= 2.5 ? "#F59E0B" : "#EF4444";
+                const delta = upd?.delta;
+                const deltaLabel = delta === undefined || delta === null
+                  ? (score !== null ? "New ★" : isSuccess ? "+0.10" : "-0.10")
+                  : delta >= 0 ? `+${delta.toFixed(2)}` : delta.toFixed(2);
+                return (
+                  <div key={agent.id}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm text-al-text">{agent.label}</span>
+                      <span className="text-sm font-semibold tabular-nums" style={{ color: scoreColor }}>
+                        {deltaLabel}
+                      </span>
+                    </div>
+                    {upd && (
+                      <div className="text-[10px] text-al-muted font-mono">
+                        Peer: {upd.breakdown.peer_review.toFixed(2)} | Human: {upd.breakdown.human_rating.toFixed(2)} | Activity: {upd.breakdown.messages_contributed.toFixed(2)} | Role: {upd.breakdown.role_weight.toFixed(2)} = <span style={{ color: scoreColor }}>{score?.toFixed(2)}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
