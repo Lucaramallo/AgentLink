@@ -829,17 +829,49 @@ export default function SessionRoomClient() {
         if (round) console.log(`[${round}] ${agent.label}: isolated node → full context (${context.length} msgs)`);
         return context;
       }
+
+      // Name-based fallback matching: edge IDs might not match message agentIds
+      const allNodes = graphNodesRef.current;
+      const neighborLabels = new Set(
+        [...neighborIds]
+          .map((id) => allNodes.find((n) => n.id === id)?.label?.toLowerCase())
+          .filter((l): l is string => Boolean(l)),
+      );
+
+      if (round) {
+        const peerCtx = context.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
+        console.log(
+          `[${round}] ${agent.label} (id=${agent.id}) | ` +
+          `edges=[${edges.map((e) => `${e.fromId}→${e.toId}`).join(" ")}] | ` +
+          `neighborIds=[${[...neighborIds].join(",")}] neighborLabels=[${[...neighborLabels].join(",")}] | ` +
+          `peer_msgs in ctx: ${peerCtx.map((m) => `${m.agentId}(${m.agentName}) id_match=${neighborIds.has(m.agentId)} name_match=${neighborLabels.has((m.agentName ?? "").toLowerCase())}`).join(" | ")}`,
+        );
+      }
+
       const visible = context.filter(
         (m) =>
           m.isHuman ||
           m.agentId === "system" ||
           m.agentId === agent.id ||
-          neighborIds.has(m.agentId),
+          neighborIds.has(m.agentId) ||
+          neighborLabels.has((m.agentName ?? "").toLowerCase()),
       );
+
+      const peerMsgs = visible.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
+
       if (round) {
-        const peerMsgs = visible.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
-        console.log(`[${round}] ${agent.label}: neighbors=[${[...neighborIds].join(",")}] peer_msgs=${peerMsgs.length} total=${visible.length}`);
+        console.log(`[${round}] ${agent.label}: peer_msgs=${peerMsgs.length} visible=${visible.length} total_ctx=${context.length}`);
+        if (peerMsgs.length === 0) {
+          console.warn(`[${round}] ${agent.label}: ZERO peer messages after filter → falling back to full context`);
+        }
       }
+
+      // Fallback: if no peer messages got through (only human/system/self), return full context.
+      // Over-sharing is better than an agent with zero peer context.
+      if (peerMsgs.length === 0) {
+        return context;
+      }
+
       return visible;
     }
 
