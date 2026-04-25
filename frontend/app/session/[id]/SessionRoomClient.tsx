@@ -269,6 +269,16 @@ function buildHtmlDeliverable(content: string, sessionId: string, teamItems: str
 </html>`;
 }
 
+interface PeerReviewData {
+  reviews: Array<{
+    voter: string;
+    voter_id: string;
+    voter_role: string;
+    scores: Record<string, number>;
+  }>;
+  weighted_averages: Record<string, number>;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function SessionRoomClient() {
@@ -304,6 +314,14 @@ export default function SessionRoomClient() {
   const [showModal, setShowModal]             = useState(false);
   const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | null>(null);
   const [verdictLoading, setVerdictLoading] = useState(false);
+
+  // Rating flow (shown before CloseModal after CONFORME)
+  const [showRatingScreen, setShowRatingScreen]   = useState(false);
+  const [peerReviewLoading, setPeerReviewLoading] = useState(false);
+  const [peerReviewData, setPeerReviewData]       = useState<PeerReviewData | null>(null);
+  const [teamRating, setTeamRating]               = useState(0);
+  const [individualRatings, setIndividualRatings] = useState<Record<string, number>>({});
+  const [ratingSubmitting, setRatingSubmitting]   = useState(false);
 
   // WS
   const wsRef   = useRef<WebSocket | null>(null);
@@ -985,6 +1003,65 @@ export default function SessionRoomClient() {
     if (refund > 0) add(refund);
   }
 
+  // ── Peer review + rating flow ─────────────────────────────────────────────
+
+  function triggerPeerReview() {
+    setPeerReviewLoading(true);
+    setShowRatingScreen(true);
+    const currentNodes = graphNodesRef.current;
+    const currentMessages = messagesRef.current;
+    const nonHumanAgents = currentNodes
+      .filter((n) => !n.isHuman)
+      .map((n) => ({ id: n.id, name: n.label, role: n.role }));
+    fetch(`${API}/demo/sessions/${roomId}/peer-review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agents: nonHumanAgents,
+        messages: currentMessages.map((m) => ({
+          agentId: m.agentId,
+          agentName: m.agentName,
+          role: m.role,
+          content: m.content,
+          isHuman: m.isHuman ?? false,
+        })),
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data) setPeerReviewData(data); })
+      .catch(() => {})
+      .finally(() => setPeerReviewLoading(false));
+  }
+
+  async function submitRatings() {
+    setRatingSubmitting(true);
+    const currentNodes = graphNodesRef.current;
+    const currentMessages = messagesRef.current;
+    const nonHumanAgents = currentNodes.filter((n) => !n.isHuman);
+    const session_stats: Record<string, number> = {};
+    for (const n of nonHumanAgents) {
+      session_stats[n.id] = currentMessages.filter(
+        (m) => m.agentId === n.id && !m.isHuman && m.agentId !== "system",
+      ).length;
+    }
+    try {
+      await fetch(`${API}/reputation/session-update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: roomId,
+          agents: nonHumanAgents.map((n) => ({ id: n.id, name: n.label, role: n.role })),
+          peer_scores: peerReviewData?.weighted_averages ?? {},
+          human_scores: { team: teamRating, individual: individualRatings },
+          session_stats,
+        }),
+      });
+    } catch { /* proceed regardless */ }
+    setRatingSubmitting(false);
+    setShowRatingScreen(false);
+    setShowModal(true);
+  }
+
   // ── Verdict handlers ──────────────────────────────────────────────────────
 
   async function postVerdict(verdict: "CONFORME" | "NO_CONFORME", reason = "") {
@@ -1006,7 +1083,7 @@ export default function SessionRoomClient() {
           applyConformeEscrow();
           setStatus("CLOSED_SUCCESS");
           setOutcome("SUCCESS");
-          setShowModal(true);
+          triggerPeerReview();
           return;
         }
         if (backendStatus === "DISPUTED" || backendOutcome === "DISPUTE") {
@@ -1034,7 +1111,7 @@ export default function SessionRoomClient() {
         applyConformeEscrow();
         setStatus("CLOSED_SUCCESS");
         setOutcome("SUCCESS");
-        setShowModal(true);
+        triggerPeerReview();
       } else {
         setStatus("CLOSED_DISPUTED");
         setOutcome("DISPUTED");
@@ -1046,7 +1123,7 @@ export default function SessionRoomClient() {
         applyConformeEscrow();
         setStatus("CLOSED_SUCCESS");
         setOutcome("SUCCESS");
-        setShowModal(true);
+        triggerPeerReview();
       } else {
         setStatus("CLOSED_DISPUTED");
         setOutcome("DISPUTED");
@@ -1415,6 +1492,21 @@ export default function SessionRoomClient() {
         </div>
       </div>
 
+      {/* Rating screen — peer reviews + human rating before close modal */}
+      {showRatingScreen && (
+        <RatingModal
+          agents={agentNodes}
+          peerReviewLoading={peerReviewLoading}
+          peerReviewData={peerReviewData}
+          teamRating={teamRating}
+          setTeamRating={setTeamRating}
+          individualRatings={individualRatings}
+          setIndividualRatings={setIndividualRatings}
+          onSubmit={submitRatings}
+          submitting={ratingSubmitting}
+        />
+      )}
+
       {/* Close modal */}
       {showModal && outcome && (
         <CloseModal
@@ -1582,6 +1674,241 @@ function ProgressBar({ step, status }: { step: number; status: SessionStatus }) 
           className="h-full rounded-full transition-all duration-700 ease-out"
           style={{ width: `${(step / 3) * 100}%`, background: color }}
         />
+      </div>
+    </div>
+  );
+}
+
+// ── Star components ─────────────────────────────────────────────────────────
+
+const STAR_PATH = "M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z";
+
+function StarDisplay({ value, size = 12 }: { value: number; size?: number }) {
+  const full = Math.round(value);
+  return (
+    <div className="flex gap-0.5 items-center">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <svg key={i} width={size} height={size} viewBox="0 0 20 20"
+          fill={i <= full ? "#F59E0B" : "none"}
+          stroke={i <= full ? "#F59E0B" : "#475569"}
+          strokeWidth={1.5}
+        >
+          <path d={STAR_PATH} />
+        </svg>
+      ))}
+    </div>
+  );
+}
+
+function StarSelector({ value, onChange, size = 24 }: { value: number; onChange: (v: number) => void; size?: number }) {
+  const [hover, setHover] = useState(0);
+  const active = hover || value;
+  return (
+    <div className="flex gap-1 items-center">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(n)}
+          onMouseEnter={() => setHover(n)}
+          onMouseLeave={() => setHover(0)}
+          className="transition-transform hover:scale-110 focus:outline-none"
+        >
+          <svg width={size} height={size} viewBox="0 0 20 20"
+            fill={active >= n ? "#F59E0B" : "none"}
+            stroke={active >= n ? "#F59E0B" : "#475569"}
+            strokeWidth={1.5}
+          >
+            <path d={STAR_PATH} />
+          </svg>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RatingModal({
+  agents,
+  peerReviewLoading,
+  peerReviewData,
+  teamRating,
+  setTeamRating,
+  individualRatings,
+  setIndividualRatings,
+  onSubmit,
+  submitting,
+}: {
+  agents: GraphNode[];
+  peerReviewLoading: boolean;
+  peerReviewData: PeerReviewData | null;
+  teamRating: number;
+  setTeamRating: (v: number) => void;
+  individualRatings: Record<string, number>;
+  setIndividualRatings: (v: Record<string, number>) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+}) {
+  const voters = peerReviewData?.reviews ?? [];
+  const wavg = peerReviewData?.weighted_averages ?? {};
+  const canSubmit = teamRating > 0 && !submitting && !peerReviewLoading;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
+      <div
+        className="bg-al-surface border border-al-border rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto"
+        style={{ boxShadow: "0 0 60px rgba(78,205,196,0.1)" }}
+      >
+        {/* Header */}
+        <div className="flex flex-col items-center mb-5">
+          <div
+            className="w-12 h-12 rounded-full flex items-center justify-center mb-3"
+            style={{ background: "rgba(78,205,196,0.12)", border: "2px solid rgba(78,205,196,0.3)" }}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="#4ECDC4">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-al-text">Session Review</h2>
+          <p className="text-sm text-al-muted mt-0.5 text-center">
+            Rate your team before closing the session
+          </p>
+        </div>
+
+        {/* Section 1: Agent Peer Reviews */}
+        <div className="mb-5">
+          <p className="text-[10px] text-al-muted uppercase tracking-wider font-semibold mb-3">
+            Agent Peer Reviews
+          </p>
+          {peerReviewLoading ? (
+            <div className="flex flex-col items-center gap-3 py-7 bg-al-bg rounded-xl border border-al-border">
+              <div className="w-5 h-5 rounded-full border-2 border-[#4ECDC4] border-t-transparent animate-spin" />
+              <p className="text-sm text-al-muted text-center px-4">
+                Agents are reviewing each other's contributions...
+              </p>
+            </div>
+          ) : voters.length > 0 ? (
+            <div className="bg-al-bg rounded-xl border border-al-border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="border-b border-al-border">
+                      <th className="px-3 py-2 text-left text-al-muted font-medium">Agent</th>
+                      {voters.map((v) => (
+                        <th key={v.voter_id} className="px-2 py-2 text-center text-al-muted font-medium whitespace-nowrap">
+                          {v.voter.split(/[-\s]/)[0]}
+                        </th>
+                      ))}
+                      <th className="px-2 py-2 text-center text-amber-400 font-semibold">W.Avg</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agents.map((agent) => (
+                      <tr key={agent.id} className="border-b border-al-border/40 last:border-0">
+                        <td className="px-3 py-2 text-al-text font-medium whitespace-nowrap">{agent.label}</td>
+                        {voters.map((v) => {
+                          const score = v.scores[agent.id];
+                          return (
+                            <td key={v.voter_id} className="px-2 py-2 text-center">
+                              {v.voter_id === agent.id ? (
+                                <span className="text-al-border text-xs">—</span>
+                              ) : score != null ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <StarDisplay value={score} size={9} />
+                                  <span className="text-al-muted text-[10px]">{score.toFixed(1)}</span>
+                                </div>
+                              ) : (
+                                <span className="text-al-muted text-xs">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="px-2 py-2 text-center">
+                          {wavg[agent.id] != null ? (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <StarDisplay value={wavg[agent.id]} size={9} />
+                              <span className="font-semibold text-amber-400 text-[10px]">
+                                {wavg[agent.id].toFixed(1)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-al-muted text-xs">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="py-4 bg-al-bg rounded-xl border border-al-border text-center text-sm text-al-muted">
+              Peer review data unavailable
+            </div>
+          )}
+        </div>
+
+        {/* Section 2: Team Rating (required) */}
+        <div className="mb-5 bg-al-bg rounded-xl border border-al-border p-4">
+          <p className="text-[10px] text-al-muted uppercase tracking-wider font-semibold mb-1">
+            Rate this team <span className="text-red-400 normal-case">*</span>
+          </p>
+          <p className="text-sm text-al-text mb-3">How do you rate the team's overall performance?</p>
+          <div className="flex items-center gap-3">
+            <StarSelector value={teamRating} onChange={setTeamRating} size={28} />
+            {teamRating > 0 && (
+              <span className="text-sm font-semibold text-amber-400">{teamRating} / 5</span>
+            )}
+          </div>
+        </div>
+
+        {/* Section 3: Individual Ratings (optional) */}
+        {agents.length > 0 && (
+          <div className="mb-5">
+            <p className="text-[10px] text-al-muted uppercase tracking-wider font-semibold mb-3">
+              Individual ratings{" "}
+              <span className="text-al-muted normal-case font-normal">(optional)</span>
+            </p>
+            <div className="space-y-2">
+              {agents.map((agent) => (
+                <div
+                  key={agent.id}
+                  className="bg-al-bg rounded-xl border border-al-border px-4 py-3 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium text-al-text">{agent.label}</span>
+                    <span className="text-xs text-al-muted ml-2">— {agent.role}</span>
+                  </div>
+                  <StarSelector
+                    value={individualRatings[agent.id] ?? 0}
+                    onChange={(v) =>
+                      setIndividualRatings({ ...individualRatings, [agent.id]: v })
+                    }
+                    size={20}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Submit */}
+        <button
+          onClick={onSubmit}
+          disabled={!canSubmit}
+          className="w-full py-3 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{
+            background: canSubmit ? "rgba(78,205,196,0.15)" : "rgba(100,116,139,0.08)",
+            border: `1px solid ${canSubmit ? "rgba(78,205,196,0.5)" : "rgba(100,116,139,0.25)"}`,
+            color: canSubmit ? "#4ECDC4" : "#64748B",
+          }}
+        >
+          {submitting
+            ? "Submitting..."
+            : teamRating === 0
+            ? "Select a team rating to continue"
+            : "Submit Review & Close Session"}
+        </button>
       </div>
     </div>
   );

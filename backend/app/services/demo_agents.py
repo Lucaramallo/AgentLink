@@ -1,6 +1,8 @@
 """Demo agent definitions and Claude API integration for AgentLink demo mode."""
 
+import json
 import os
+import re
 
 import anthropic
 
@@ -134,3 +136,65 @@ async def get_agent_response(
     )
 
     return next((block.text for block in response.content if block.type == "text"), "")
+
+
+async def get_peer_review(
+    agent_id: str,
+    agent_name: str,
+    session_messages: list[dict],
+    other_agents: list[dict],
+) -> dict[str, float]:
+    """Have an agent rate each of its colleagues from 1–5 based on session contributions."""
+    from app.config import settings
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key if settings.anthropic_api_key else None)
+
+    others_list = ", ".join(f'"{a["id"]}" ({a["name"]})' for a in other_agents)
+    other_ids = {a["id"] for a in other_agents}
+
+    system = (
+        f"You are {agent_name}. Rate each colleague's contribution in this session from 1-5. "
+        "Consider: quality of analysis, usefulness of their input to the team, "
+        "how much they contributed to the final deliverable. "
+        f"Respond ONLY with valid JSON using agent IDs as keys: {{{others_list}}}"
+    )
+
+    context_lines = []
+    for m in session_messages[-30:]:
+        sender = m.get("agentName") or m.get("sender") or "Unknown"
+        content = m.get("content") or ""
+        if content:
+            context_lines.append(f"{sender}: {content[:200]}")
+
+    user_msg = (
+        "Session conversation:\n" + "\n".join(context_lines) + "\n\n"
+        "Rate each colleague from 1-5 using their agent IDs as keys. Respond ONLY with valid JSON."
+    )
+
+    response = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=256,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+
+    text = next((block.text for block in response.content if block.type == "text"), "{}")
+
+    json_match = re.search(r'\{[^}]+\}', text, re.DOTALL)
+    if json_match:
+        try:
+            raw = json.loads(json_match.group())
+            result = {}
+            for k, v in raw.items():
+                if k in other_ids:
+                    try:
+                        score = float(v)
+                        result[k] = max(1.0, min(5.0, round(score, 1)))
+                    except (TypeError, ValueError):
+                        pass
+            if result:
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    import random
+    return {a["id"]: round(random.uniform(3.0, 5.0), 1) for a in other_agents}

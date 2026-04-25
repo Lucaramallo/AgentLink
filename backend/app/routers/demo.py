@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from app.config import settings
-from app.services.demo_agents import AGENTS, get_agent_response
+from app.services.demo_agents import AGENTS, get_agent_response, get_peer_review
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -122,3 +122,70 @@ async def demo_respond(payload: DemoRequest, request: Request):
         )
     finally:
         await r.aclose()
+
+
+# ── Peer review ────────────────────────────────────────────────────────────
+
+_ROLE_WEIGHTS: dict[str, float] = {
+    "Requester": 1.5,
+    "Reviewer": 1.3,
+    "Contributor": 1.0,
+    "Builder": 1.0,
+    "Observer": 0.5,
+}
+
+
+class PeerReviewAgent(BaseModel):
+    id: str
+    name: str
+    role: str = "Contributor"
+
+
+class PeerReviewMessage(BaseModel):
+    agentId: str = ""
+    agentName: str = ""
+    role: str = ""
+    content: str = ""
+    isHuman: bool = False
+
+
+class PeerReviewRequest(BaseModel):
+    agents: list[PeerReviewAgent] = []
+    messages: list[PeerReviewMessage] = []
+
+
+@router.post("/sessions/{room_id}/peer-review")
+async def session_peer_review(room_id: str, payload: PeerReviewRequest):
+    non_human = [a for a in payload.agents]
+    if len(non_human) < 2:
+        return {"reviews": [], "weighted_averages": {a.id: 0.0 for a in non_human}}
+
+    messages_dicts = [m.model_dump() for m in payload.messages]
+    reviews = []
+    totals: dict[str, float] = {a.id: 0.0 for a in non_human}
+    weights: dict[str, float] = {a.id: 0.0 for a in non_human}
+
+    for agent in non_human:
+        others = [a for a in non_human if a.id != agent.id]
+        scores = await get_peer_review(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            session_messages=messages_dicts,
+            other_agents=[{"id": a.id, "name": a.name} for a in others],
+        )
+        role_weight = _ROLE_WEIGHTS.get(agent.role, 1.0)
+        reviews.append({
+            "voter": agent.name,
+            "voter_id": agent.id,
+            "voter_role": agent.role,
+            "scores": scores,
+        })
+        for aid, score in scores.items():
+            totals[aid] = totals.get(aid, 0.0) + score * role_weight
+            weights[aid] = weights.get(aid, 0.0) + role_weight
+
+    weighted_averages = {
+        aid: round(totals[aid] / weights[aid], 2) if weights.get(aid, 0) > 0 else 0.0
+        for aid in totals
+    }
+    return {"reviews": reviews, "weighted_averages": weighted_averages}

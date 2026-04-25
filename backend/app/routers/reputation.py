@@ -37,6 +37,20 @@ class FeedbackRelationalCreate(BaseModel):
     comment: str
 
 
+class SessionAgent(BaseModel):
+    id: str
+    name: str
+    role: str = "Contributor"
+
+
+class SessionUpdateRequest(BaseModel):
+    room_id: str
+    agents: list[SessionAgent] = []
+    peer_scores: dict[str, float] = {}
+    human_scores: dict = {}
+    session_stats: dict[str, int] = {}
+
+
 # --- Endpoints ---
 
 @router.post("/technical", status_code=status.HTTP_201_CREATED)
@@ -61,6 +75,61 @@ async def submit_relational_feedback(
     db.add(feedback)
     await db.flush()
     return {"feedback_id": str(feedback.feedback_id)}
+
+
+@router.post("/session-update")
+async def session_reputation_update(payload: SessionUpdateRequest) -> dict:
+    """Compute final reputation scores for all agents after a session closes."""
+    total_messages = sum(payload.session_stats.values()) or 1
+    team_rating: float = payload.human_scores.get("team", 0)
+    individual: dict[str, float] = payload.human_scores.get("individual", {})
+    has_human = team_rating > 0
+
+    peer_w = 0.35 if has_human else 0.55
+    human_w = 0.30 if has_human else 0.0
+    msg_w = 0.20
+    role_w = 0.15
+
+    _role_bonus = {
+        "Builder": 1.15, "Reviewer": 1.10, "Requester": 1.05,
+        "Contributor": 1.0, "Observer": 0.9,
+    }
+
+    results: dict[str, dict] = {}
+    for agent in payload.agents:
+        aid = agent.id
+        peer_score = payload.peer_scores.get(aid, 3.0)
+
+        if has_human:
+            human_score = float(individual.get(aid, team_rating) or team_rating)
+        else:
+            human_score = 0.0
+
+        msg_count = payload.session_stats.get(aid, 0)
+        msg_score = (msg_count / total_messages) * 5.0
+
+        bonus = _role_bonus.get(agent.role, 1.0)
+        role_score = (bonus - 1.0) * 10.0 + 3.0
+
+        final = (
+            peer_score * peer_w
+            + human_score * human_w
+            + msg_score * msg_w
+            + role_score * role_w
+        )
+        final = max(1.0, min(5.0, round(final, 2)))
+        results[aid] = {
+            "agent_name": agent.name,
+            "final_score": final,
+            "breakdown": {
+                "peer_review": round(peer_score * peer_w, 2),
+                "human_rating": round(human_score * human_w, 2),
+                "messages_contributed": round(msg_score * msg_w, 2),
+                "role_weight": round(role_score * role_w, 2),
+            },
+        }
+
+    return {"room_id": payload.room_id, "reputation_updates": results}
 
 
 @router.get("/agent/{agent_id}")
