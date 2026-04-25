@@ -8,11 +8,13 @@ const DEFAULT_BALANCE = 100;
 interface CreditsCtx {
   balance: number;
   deduct: (amount: number) => void;
+  add: (amount: number) => void;
 }
 
 const CreditsContext = createContext<CreditsCtx>({
   balance: DEFAULT_BALANCE,
   deduct: () => {},
+  add: () => {},
 });
 
 export function CreditsProvider({ children }: { children: React.ReactNode }) {
@@ -31,8 +33,16 @@ export function CreditsProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
+  function add(amount: number) {
+    setBalance((prev) => {
+      const next = Math.round((prev + amount) * 10) / 10;
+      localStorage.setItem(STORAGE_KEY, String(next));
+      return next;
+    });
+  }
+
   return (
-    <CreditsContext.Provider value={{ balance, deduct }}>
+    <CreditsContext.Provider value={{ balance, deduct, add }}>
       {children}
     </CreditsContext.Provider>
   );

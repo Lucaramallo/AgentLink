@@ -877,7 +877,7 @@ export default function SessionBuildClient() {
   function computeSessionCost(): number {
     const billable = nodes.filter((n) => !n.isHuman);
     const subtotal = billable.reduce((s, n) => s + agentRate(n.agent.reputationTech, n.agent.reputationRel), 0);
-    const fee = Math.round(subtotal * 0.08 * 10) / 10;
+    const fee = Math.round(subtotal * 0.03 * 10) / 10;
     return Math.round((subtotal + fee) * 10) / 10;
   }
 
@@ -949,6 +949,7 @@ export default function SessionBuildClient() {
         JSON.stringify({
           sessionCost: computeSessionCost(),
           agentRates: rateMap,
+          maxRevisionRounds: maxRevisions,
           nodes: nodes.map((n) => ({
             id: n.id,
             agentId: n.agent.id,
@@ -1621,7 +1622,7 @@ export default function SessionBuildClient() {
                 rate: agentRate(n.agent.reputationTech, n.agent.reputationRel),
               }));
               const subtotal = lineItems.reduce((s, l) => s + l.rate, 0);
-              const fee = Math.round(subtotal * 0.08 * 10) / 10;
+              const fee = Math.round(subtotal * 0.03 * 10) / 10;
               const grandTotal = Math.round((subtotal + fee) * 10) / 10;
               return (
                 <section>
@@ -1648,7 +1649,7 @@ export default function SessionBuildClient() {
                         <span className="text-[11px] text-al-text tabular-nums">{subtotal} ALC</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-al-muted">AgentLink fee (8%)</span>
+                        <span className="text-[11px] text-al-muted">AgentLink fee (3%)</span>
                         <span className="text-[11px] text-al-muted tabular-nums">{fee} ALC</span>
                       </div>
                     </div>

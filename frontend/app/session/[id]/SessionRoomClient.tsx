@@ -334,8 +334,15 @@ export default function SessionRoomClient() {
   // Agent rates from build page (nodeId → ALC/session)
   const [agentRates, setAgentRates] = useState<Record<string, number>>({});
   const [sessionCost, setSessionCost] = useState<number | null>(null);
+  const [actualCost, setActualCost] = useState<number | null>(null);
+  const [refundAmount, setRefundAmount] = useState<number | null>(null);
 
-  const { balance } = useCredits();
+  // Configurable rounds (read from sessionStorage, capped at 10)
+  const maxRoundsRef = useRef(3);
+  // Track how many rounds actually completed
+  const roundsCompletedRef = useRef(0);
+
+  const { balance, add } = useCredits();
 
   // ── Restore canvas layout from build page ───────────────────────────────
   useEffect(() => {
@@ -346,12 +353,16 @@ export default function SessionRoomClient() {
       const saved = JSON.parse(raw) as {
         sessionCost?: number;
         agentRates?: Record<string, number>;
+        maxRevisionRounds?: number;
         nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean; clusterId?: string | null; isBuilder?: boolean }>;
         edges: Array<{ a: string; b: string }>;
         clusters?: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number }>;
       };
       if (saved.sessionCost != null) setSessionCost(saved.sessionCost);
       if (saved.agentRates) setAgentRates(saved.agentRates);
+      if (saved.maxRevisionRounds != null) {
+        maxRoundsRef.current = Math.min(10, Math.max(1, saved.maxRevisionRounds));
+      }
       const restoredNodes: GraphNode[] = saved.nodes.map((n) => ({
         id: n.id,
         x: n.x,
@@ -755,6 +766,13 @@ export default function SessionRoomClient() {
     const agents = graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer");
     if (agents.length === 0) return;
 
+    const maxRounds = maxRoundsRef.current;
+    const builderAgents = agents.filter((n) => n.isBuilder);
+    // Final round: builders only if any are designated, otherwise all agents
+    const finalRoundAgents = builderAgents.length > 0 ? builderAgents : agents;
+
+    roundsCompletedRef.current = 0;
+
     function addSystemMsg(content: string) {
       const msg = systemMsg(content);
       setMessages((prev) => [...prev, msg]);
@@ -762,7 +780,6 @@ export default function SessionRoomClient() {
 
     function getVisibleContext(agent: GraphNode, context: Message[], round?: string): Message[] {
       const edges = graphEdgesRef.current;
-      // No edges defined → every agent sees all messages (full mesh)
       if (edges.length === 0) {
         if (round) console.log(`[${round}] ${agent.label}: no edges → full context (${context.length} msgs)`);
         return context;
@@ -772,7 +789,6 @@ export default function SessionRoomClient() {
           .filter((e) => e.fromId === agent.id || e.toId === agent.id)
           .map((e) => (e.fromId === agent.id ? e.toId : e.fromId)),
       );
-      // Agent has no edges → fall back to full visibility so R2 context is never empty
       if (neighborIds.size === 0) {
         if (round) console.log(`[${round}] ${agent.label}: isolated node → full context (${context.length} msgs)`);
         return context;
@@ -848,35 +864,50 @@ export default function SessionRoomClient() {
       agents.map((agent) => callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages, "R1"), "R1")),
     );
     const r1Messages = r1Results.filter((m): m is Message => m !== null);
+    roundsCompletedRef.current = 1;
     if (r1Messages.length === 0) return;
 
-    // ── ROUND 2: Cross-review (sequential) ───────────────────────────────────
-    addSystemMsg("Round 2 — Cross-review");
-    const r2Prompt =
-      "Round 2: You have read your colleagues' initial analyses. Identify where you agree, where you disagree, and refine your position. Be specific about what you accept or challenge from others.";
-    const r2Base = [...sessionMessages, ...r1Messages];
-    const r2Messages: Message[] = [];
-    for (const agent of agents) {
-      const msg = await callAgent(agent, r2Prompt, getVisibleContext(agent, [...r2Base, ...r2Messages], "R2"), "R2");
-      if (!msg) continue;
-      r2Messages.push(msg);
-    }
-    if (r2Messages.length === 0) return;
+    let allMessages: Message[] = [...sessionMessages, ...r1Messages];
 
-    // ── ROUND 3: Consensus and deliverable (sequential) ──────────────────────
-    addSystemMsg("Round 3 — Consensus and deliverable");
-    const r3Prompt =
-      "Round 3 (final): Based on all previous discussion, contribute your section to the unified team deliverable. The last agent should synthesize everything into one cohesive document.";
-    const r3Base = [...r2Base, ...r2Messages];
-    for (let i = 0; i < agents.length; i++) {
-      const agent = agents[i];
-      const isLast = i === agents.length - 1;
-      const prompt = isLast
-        ? `${r3Prompt} You are the last agent — synthesize all contributions into one cohesive final document.`
-        : r3Prompt;
-      const msg = await callAgent(agent, prompt, getVisibleContext(agent, r3Base, "R3"), isLast ? "DELIVERABLE" : "R3");
-      if (msg) r3Base.push(msg);
+    // ── ROUNDS 2 through maxRounds-1: Cross-review (sequential) ──────────────
+    for (let round = 2; round < maxRounds; round++) {
+      addSystemMsg(`Round ${round} — Cross-review`);
+      const roundPrompt =
+        `Round ${round}: You have read your colleagues' analyses. Identify where you agree, where you disagree, and refine your position. Be specific about what you accept or challenge from others.`;
+      const roundMsgs: Message[] = [];
+      for (const agent of agents) {
+        const msg = await callAgent(
+          agent,
+          roundPrompt,
+          getVisibleContext(agent, [...allMessages, ...roundMsgs], `R${round}`),
+          "R2",
+        );
+        if (msg) roundMsgs.push(msg);
+      }
+      roundsCompletedRef.current = round;
+      allMessages = [...allMessages, ...roundMsgs];
+      if (roundMsgs.length === 0) return;
     }
+
+    // ── Final round: Consensus and deliverable (sequential, builders only) ────
+    addSystemMsg(`Round ${maxRounds} — Consensus and deliverable`);
+    const finalPrompt =
+      `Round ${maxRounds} (final): Based on all previous discussion, contribute your section to the unified team deliverable. The last agent should synthesize everything into one cohesive document.`;
+    for (let i = 0; i < finalRoundAgents.length; i++) {
+      const agent = finalRoundAgents[i];
+      const isLast = i === finalRoundAgents.length - 1;
+      const prompt = isLast
+        ? `${finalPrompt} You are the last agent — synthesize all contributions into one cohesive final document.`
+        : finalPrompt;
+      const msg = await callAgent(
+        agent,
+        prompt,
+        getVisibleContext(agent, allMessages, `R${maxRounds}`),
+        isLast ? "DELIVERABLE" : "R3",
+      );
+      if (msg) allMessages = [...allMessages, msg];
+    }
+    roundsCompletedRef.current = maxRounds;
   }
 
   // ── Send human message ────────────────────────────────────────────────────
@@ -925,6 +956,24 @@ export default function SessionRoomClient() {
     setSending(false);
   }
 
+  // ── Escrow settlement ────────────────────────────────────────────────────
+
+  function applyConformeEscrow() {
+    if (sessionCost == null) return;
+    const nonHumanNodes = graphNodesRef.current.filter((n) => !n.isHuman);
+    const totalRates = nonHumanNodes.reduce((s, n) => s + (agentRates[n.id] ?? 15), 0);
+    const maxRounds = maxRoundsRef.current;
+    const completedRounds = roundsCompletedRef.current || maxRounds;
+    const perRoundRate = totalRates / maxRounds;
+    const actualBase = Math.round(completedRounds * perRoundRate * 10) / 10;
+    const actualFee = Math.round(actualBase * 0.03 * 10) / 10;
+    const computed = Math.round((actualBase + actualFee) * 10) / 10;
+    const refund = Math.max(0, Math.round((sessionCost - computed) * 10) / 10);
+    setActualCost(computed);
+    setRefundAmount(refund);
+    if (refund > 0) add(refund);
+  }
+
   // ── Verdict handlers ──────────────────────────────────────────────────────
 
   async function postVerdict(verdict: "CONFORME" | "NO_CONFORME", reason = "") {
@@ -943,6 +992,7 @@ export default function SessionRoomClient() {
         const backendOutcome: string = data.outcome ?? "";
 
         if (backendStatus === "CLOSED" || backendOutcome === "SUCCESS") {
+          applyConformeEscrow();
           setStatus("CLOSED_SUCCESS");
           setOutcome("SUCCESS");
           setShowModal(true);
@@ -970,6 +1020,7 @@ export default function SessionRoomClient() {
 
       // Fallback: if backend call fails, apply verdict locally
       if (verdict === "CONFORME") {
+        applyConformeEscrow();
         setStatus("CLOSED_SUCCESS");
         setOutcome("SUCCESS");
         setShowModal(true);
@@ -981,6 +1032,7 @@ export default function SessionRoomClient() {
     } catch {
       // Network error — apply locally
       if (verdict === "CONFORME") {
+        applyConformeEscrow();
         setStatus("CLOSED_SUCCESS");
         setOutcome("SUCCESS");
         setShowModal(true);
@@ -1362,6 +1414,8 @@ export default function SessionRoomClient() {
           graphClusters={graphClusters}
           agentRates={agentRates}
           sessionCost={sessionCost}
+          actualCost={actualCost}
+          refundAmount={refundAmount}
           deliverable={deliverableMsg}
           deliverableExt={deliverableExt}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
@@ -1529,6 +1583,8 @@ function CloseModal({
   graphClusters,
   agentRates,
   sessionCost,
+  actualCost,
+  refundAmount,
   deliverable,
   deliverableExt = "md",
   onDownloadDeliverable,
@@ -1542,6 +1598,8 @@ function CloseModal({
   graphClusters: GraphCluster[];
   agentRates: Record<string, number>;
   sessionCost?: number | null;
+  actualCost?: number | null;
+  refundAmount?: number | null;
   deliverable?: Message | null;
   deliverableExt?: string;
   onDownloadDeliverable?: (msg: Message) => void;
@@ -1560,7 +1618,7 @@ function CloseModal({
   }));
   const totalMsgs = agentMsgCounts.reduce((s, a) => s + a.count, 0);
   const totalCost = agentMsgCounts.reduce((s, a) => s + a.rate, 0);
-  const alcFee = Math.round(totalCost * 0.08 * 10) / 10;
+  const alcFee = Math.round(totalCost * 0.03 * 10) / 10;
   const distributable = Math.round((totalCost - alcFee) * 10) / 10;
 
   return (
@@ -1650,17 +1708,36 @@ function CloseModal({
               </div>
             </div>
             <div className="border-t border-amber-400/15 px-3 py-2 flex items-center justify-between">
-              <span className="text-[11px] text-al-muted">AgentLink fee (8%)</span>
+              <span className="text-[11px] text-al-muted">AgentLink fee (3%)</span>
               <span className="text-[11px] text-al-muted tabular-nums">{alcFee} ALC</span>
             </div>
           </div>
         )}
 
-        {/* Session cost */}
+        {/* Escrow settlement */}
         {sessionCost != null && (
-          <div className="mb-4 flex items-center justify-between px-3 py-2.5 bg-amber-400/5 border border-amber-400/20 rounded-xl">
-            <span className="text-xs text-al-muted">Session cost deducted</span>
-            <span className="text-sm font-bold text-amber-400 tabular-nums">{sessionCost} ALC</span>
+          <div className="mb-4 rounded-xl border border-amber-400/20 bg-amber-400/5 overflow-hidden">
+            <div className="px-4 py-2 border-b border-amber-400/15">
+              <p className="text-[10px] text-amber-400 uppercase tracking-wider font-bold">Escrow Settlement</p>
+            </div>
+            <div className="px-3 py-2 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-al-muted">Estimated cost (blocked)</span>
+                <span className="text-[11px] text-al-text tabular-nums">{sessionCost} ALC</span>
+              </div>
+              {actualCost != null && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-al-muted">Actual cost (used)</span>
+                  <span className="text-[11px] text-al-text tabular-nums">{actualCost} ALC</span>
+                </div>
+              )}
+              {refundAmount != null && (
+                <div className="flex items-center justify-between border-t border-amber-400/15 pt-1.5">
+                  <span className="text-[11px] font-semibold text-green-400">Refund returned</span>
+                  <span className="text-[11px] font-bold text-green-400 tabular-nums">+{refundAmount} ALC</span>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
