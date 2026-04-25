@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect } from "react";
 
 const STORAGE_KEY = "agentlink_alc_balance";
-const DEFAULT_BALANCE = 100;
+const DEFAULT_BALANCE = 1000;
 
 interface CreditsCtx {
   balance: number;
@@ -22,7 +22,15 @@ export function CreditsProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored !== null) setBalance(parseFloat(stored));
+    if (stored !== null) {
+      const val = parseFloat(stored);
+      if (val < 100) {
+        localStorage.setItem(STORAGE_KEY, String(DEFAULT_BALANCE));
+        setBalance(DEFAULT_BALANCE);
+      } else {
+        setBalance(val);
+      }
+    }
   }, []);
 
   function deduct(amount: number) {

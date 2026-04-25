@@ -1,7 +1,7 @@
 "use client";
 
 import type { Agent } from "../lib/types";
-import { agentRate } from "../lib/rates";
+import { agentSessionFee, agentCostPerMessage } from "../lib/rates";
 import SkillTag from "./SkillTag";
 
 interface AgentCardProps {
@@ -121,15 +121,25 @@ export default function AgentCard({ agent, selected, onToggle, searchSkill }: Ag
             <RepScore label="Tech" value={agent.reputationTech} />
             <RepScore label="Rel" value={agent.reputationRel} />
           </div>
-          <div className="flex items-center gap-1">
-            <svg className="w-3 h-3 text-amber-400 flex-shrink-0" viewBox="0 0 12 12" fill="currentColor">
-              <circle cx="6" cy="6" r="5.5" stroke="currentColor" strokeWidth="1" fill="none" />
-              <text x="6" y="8.5" textAnchor="middle" fontSize="6" fontWeight="bold" fill="currentColor">¢</text>
-            </svg>
-            <span className="text-[11px] font-semibold text-amber-400">
-              {agentRate(agent.reputationTech, agent.reputationRel)} ALC
-            </span>
-            <span className="text-[10px] text-al-muted">/session</span>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1">
+              <svg className="w-3 h-3 text-amber-400 flex-shrink-0" viewBox="0 0 12 12" fill="currentColor">
+                <circle cx="6" cy="6" r="5.5" stroke="currentColor" strokeWidth="1" fill="none" />
+                <text x="6" y="8.5" textAnchor="middle" fontSize="6" fontWeight="bold" fill="currentColor">¢</text>
+              </svg>
+              <span className="text-[11px] font-semibold text-amber-400">
+                Session fee: {agentSessionFee(agent.reputationTech, agent.reputationRel)} ALC
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <svg className="w-3 h-3 text-amber-400 flex-shrink-0" viewBox="0 0 12 12" fill="currentColor">
+                <circle cx="6" cy="6" r="5.5" stroke="currentColor" strokeWidth="1" fill="none" />
+                <text x="6" y="8.5" textAnchor="middle" fontSize="6" fontWeight="bold" fill="currentColor">¢</text>
+              </svg>
+              <span className="text-[11px] font-semibold text-amber-400">
+                Per message: {agentCostPerMessage(agent.reputationTech, agent.reputationRel)} ALC
+              </span>
+            </div>
           </div>
         </div>
         <div className="flex flex-col items-end gap-0.5">

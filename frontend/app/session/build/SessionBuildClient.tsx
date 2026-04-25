@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Agent, SessionRole } from "../../lib/types";
 import { fetchAgents } from "../../lib/api";
-import { agentRate } from "../../lib/rates";
+import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
 
 const API_BASE = "http://192.168.0.104:8000/api/v1";
@@ -820,8 +820,9 @@ export default function SessionBuildClient() {
     setShowPicker(false);
     setPickerSearch("");
 
-    const rate = agentRate(agent.reputationTech, agent.reputationRel);
-    setAgentAddedToast(`Agent added · +${rate} ALC to session cost`);
+    const fee = agentSessionFee(agent.reputationTech, agent.reputationRel);
+    const msgRate = agentCostPerMessage(agent.reputationTech, agent.reputationRel);
+    setAgentAddedToast(`Agent added · ${fee} ALC session fee + ${msgRate} ALC/msg`);
     if (agentAddedToastTimer.current) clearTimeout(agentAddedToastTimer.current);
     agentAddedToastTimer.current = setTimeout(() => setAgentAddedToast(null), 2500);
   }
@@ -876,9 +877,11 @@ export default function SessionBuildClient() {
 
   function computeSessionCost(): number {
     const billable = nodes.filter((n) => !n.isHuman);
-    const subtotal = billable.reduce((s, n) => s + agentRate(n.agent.reputationTech, n.agent.reputationRel), 0);
-    const fee = Math.round(subtotal * 0.03 * 10) / 10;
-    return Math.round((subtotal + fee) * 10) / 10;
+    const fixedCosts = billable.reduce((s, n) => s + agentSessionFee(n.agent.reputationTech, n.agent.reputationRel), 0);
+    const variableCosts = billable.reduce((s, n) => s + agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel) * maxRevisions, 0);
+    const maximum = fixedCosts + variableCosts;
+    const fee = Math.round(maximum * 0.03 * 10) / 10;
+    return Math.round((maximum + fee) * 10) / 10;
   }
 
   function openSession() {
@@ -940,8 +943,10 @@ export default function SessionBuildClient() {
       const { room_id } = await roomRes.json();
 
       const rateMap: Record<string, number> = {};
+      const msgRateMap: Record<string, number> = {};
       nodes.forEach((n) => {
-        rateMap[n.id] = agentRate(n.agent.reputationTech, n.agent.reputationRel);
+        rateMap[n.id] = agentSessionFee(n.agent.reputationTech, n.agent.reputationRel);
+        msgRateMap[n.id] = agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel);
       });
 
       sessionStorage.setItem(
@@ -949,6 +954,7 @@ export default function SessionBuildClient() {
         JSON.stringify({
           sessionCost: computeSessionCost(),
           agentRates: rateMap,
+          agentMsgRates: msgRateMap,
           maxRevisionRounds: maxRevisions,
           nodes: nodes.map((n) => ({
             id: n.id,
@@ -1619,11 +1625,14 @@ export default function SessionBuildClient() {
               if (billableNodes.length === 0) return null;
               const lineItems = billableNodes.map((n) => ({
                 name: n.agent.name,
-                rate: agentRate(n.agent.reputationTech, n.agent.reputationRel),
+                sessionFee: agentSessionFee(n.agent.reputationTech, n.agent.reputationRel),
+                costPerMsg: agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel),
               }));
-              const subtotal = lineItems.reduce((s, l) => s + l.rate, 0);
-              const fee = Math.round(subtotal * 0.03 * 10) / 10;
-              const grandTotal = Math.round((subtotal + fee) * 10) / 10;
+              const fixedTotal = lineItems.reduce((s, l) => s + l.sessionFee, 0);
+              const variableTotal = lineItems.reduce((s, l) => s + l.costPerMsg * maxRevisions, 0);
+              const maximum = fixedTotal + variableTotal;
+              const alcFee = Math.round(maximum * 0.03 * 10) / 10;
+              const grandTotal = Math.round((maximum + alcFee) * 10) / 10;
               return (
                 <section>
                   <div className="flex items-center justify-between mb-2">
@@ -1635,27 +1644,59 @@ export default function SessionBuildClient() {
                     </span>
                   </div>
                   <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 overflow-hidden">
-                    <div className="px-3 py-2 space-y-1.5">
-                      {lineItems.map((item) => (
-                        <div key={item.name} className="flex items-center justify-between">
-                          <span className="text-[11px] text-al-muted-2 truncate max-w-[160px]">{item.name}</span>
-                          <span className="text-[11px] text-al-text tabular-nums">{item.rate} ALC</span>
+                    {/* Fixed costs */}
+                    <div className="px-3 pt-2 pb-1">
+                      <p className="text-[9px] text-al-muted uppercase tracking-wider mb-1.5">Fixed costs (session fees)</p>
+                      <div className="space-y-1">
+                        {lineItems.map((item) => (
+                          <div key={item.name} className="flex items-center justify-between">
+                            <span className="text-[11px] text-al-muted-2 truncate max-w-[160px]">{item.name}</span>
+                            <span className="text-[11px] text-al-text tabular-nums">{item.sessionFee} ALC</span>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between pt-0.5 border-t border-amber-400/10">
+                          <span className="text-[11px] text-al-muted">Subtotal</span>
+                          <span className="text-[11px] text-al-text tabular-nums">{fixedTotal} ALC</span>
                         </div>
-                      ))}
+                      </div>
                     </div>
+                    {/* Variable costs */}
+                    <div className="border-t border-amber-400/10 px-3 pt-2 pb-1">
+                      <p className="text-[9px] text-al-muted uppercase tracking-wider mb-1.5">Variable costs (max {maxRevisions} rounds)</p>
+                      <div className="space-y-1">
+                        {lineItems.map((item) => (
+                          <div key={item.name} className="flex items-center justify-between">
+                            <span className="text-[11px] text-al-muted-2 truncate max-w-[130px]">{item.name}</span>
+                            <span className="text-[11px] text-al-text tabular-nums">
+                              {item.costPerMsg}×{maxRevisions} = {item.costPerMsg * maxRevisions} ALC
+                            </span>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between pt-0.5 border-t border-amber-400/10">
+                          <span className="text-[11px] text-al-muted">Subtotal</span>
+                          <span className="text-[11px] text-al-text tabular-nums">{variableTotal} ALC</span>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Totals */}
                     <div className="border-t border-amber-400/15 px-3 py-2 space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-al-muted">Subtotal</span>
-                        <span className="text-[11px] text-al-text tabular-nums">{subtotal} ALC</span>
+                        <span className="text-[11px] text-al-muted">Maximum possible</span>
+                        <span className="text-[11px] text-al-text tabular-nums">{maximum} ALC</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] text-al-muted">AgentLink fee (3%)</span>
-                        <span className="text-[11px] text-al-muted tabular-nums">{fee} ALC</span>
+                        <span className="text-[11px] text-al-muted tabular-nums">{alcFee} ALC</span>
                       </div>
                     </div>
-                    <div className="border-t border-amber-400/20 px-3 py-2 flex items-center justify-between bg-amber-400/8">
-                      <span className="text-[11px] font-bold text-amber-400">Grand Total</span>
-                      <span className="text-[13px] font-bold text-amber-400 tabular-nums">{grandTotal} ALC</span>
+                    <div className="border-t border-amber-400/20 px-3 py-2 bg-amber-400/8">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[11px] font-bold text-amber-400">Total blocked</span>
+                        <span className="text-[13px] font-bold text-amber-400 tabular-nums">{grandTotal} ALC</span>
+                      </div>
+                      <p className="text-[9px] text-al-muted leading-relaxed">
+                        Actual cost calculated at session close. Unused funds returned to your balance.
+                      </p>
                     </div>
                   </div>
                 </section>
@@ -1770,7 +1811,7 @@ function CostConfirmModal({
         <div className="space-y-3 mb-5">
           <div className="bg-al-bg border border-al-border rounded-xl p-4 space-y-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-al-muted">Session cost</span>
+              <span className="text-xs text-al-muted">Maximum blocked</span>
               <span className="text-sm font-bold text-amber-400 tabular-nums">{cost} ALC</span>
             </div>
             <div className="flex items-center justify-between border-t border-al-border pt-2.5">
@@ -1778,7 +1819,7 @@ function CostConfirmModal({
               <span className="text-sm text-al-text tabular-nums">{balance} ALC</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-al-muted">Balance after</span>
+              <span className="text-xs text-al-muted">Balance after block</span>
               <span
                 className="text-sm font-semibold tabular-nums"
                 style={{ color: insufficient ? "#EF4444" : "#4ECDC4" }}
@@ -1787,6 +1828,9 @@ function CostConfirmModal({
               </span>
             </div>
           </div>
+          <p className="text-[10px] text-al-muted text-center leading-relaxed">
+            Unused funds are returned at session close.
+          </p>
 
           {insufficient && (
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/30">

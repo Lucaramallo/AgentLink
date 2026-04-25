@@ -325,14 +325,17 @@ export default function SessionRoomClient() {
 
   // Stable refs so async callbacks always see latest graph state
   const graphEdgesRef = useRef<GraphEdge[]>([]);
+  const messagesRef = useRef<Message[]>([]);
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
   useEffect(() => { graphEdgesRef.current = graphEdges; }, [graphEdges]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   // Flag set when we restore from sessionStorage — prevents API from overwriting
   const savedGraphLoadedRef = useRef(false);
 
-  // Agent rates from build page (nodeId → ALC/session)
+  // Agent rates from build page (nodeId → session fee ALC, nodeId → cost per message ALC)
   const [agentRates, setAgentRates] = useState<Record<string, number>>({});
+  const [agentMsgRates, setAgentMsgRates] = useState<Record<string, number>>({});
   const [sessionCost, setSessionCost] = useState<number | null>(null);
   const [actualCost, setActualCost] = useState<number | null>(null);
   const [refundAmount, setRefundAmount] = useState<number | null>(null);
@@ -353,6 +356,7 @@ export default function SessionRoomClient() {
       const saved = JSON.parse(raw) as {
         sessionCost?: number;
         agentRates?: Record<string, number>;
+        agentMsgRates?: Record<string, number>;
         maxRevisionRounds?: number;
         nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean; clusterId?: string | null; isBuilder?: boolean }>;
         edges: Array<{ a: string; b: string }>;
@@ -360,6 +364,7 @@ export default function SessionRoomClient() {
       };
       if (saved.sessionCost != null) setSessionCost(saved.sessionCost);
       if (saved.agentRates) setAgentRates(saved.agentRates);
+      if (saved.agentMsgRates) setAgentMsgRates(saved.agentMsgRates);
       if (saved.maxRevisionRounds != null) {
         maxRoundsRef.current = Math.min(10, Math.max(1, saved.maxRevisionRounds));
       }
@@ -961,11 +966,17 @@ export default function SessionRoomClient() {
   function applyConformeEscrow() {
     if (sessionCost == null) return;
     const nonHumanNodes = graphNodesRef.current.filter((n) => !n.isHuman);
-    const totalRates = nonHumanNodes.reduce((s, n) => s + (agentRates[n.id] ?? 15), 0);
-    const maxRounds = maxRoundsRef.current;
-    const completedRounds = roundsCompletedRef.current || maxRounds;
-    const perRoundRate = totalRates / maxRounds;
-    const actualBase = Math.round(completedRounds * perRoundRate * 10) / 10;
+    const currentMessages = messagesRef.current;
+    let actualBase = 0;
+    nonHumanNodes.forEach((n) => {
+      const sessionFee = agentRates[n.id] ?? 3;
+      const costPerMsg = agentMsgRates[n.id] ?? 1;
+      const msgCount = currentMessages.filter(
+        (m) => m.agentId === n.id && !m.isHuman && m.agentId !== "system",
+      ).length;
+      actualBase += sessionFee + msgCount * costPerMsg;
+    });
+    actualBase = Math.round(actualBase * 10) / 10;
     const actualFee = Math.round(actualBase * 0.03 * 10) / 10;
     const computed = Math.round((actualBase + actualFee) * 10) / 10;
     const refund = Math.max(0, Math.round((sessionCost - computed) * 10) / 10);
@@ -1413,6 +1424,7 @@ export default function SessionRoomClient() {
           messages={messages}
           graphClusters={graphClusters}
           agentRates={agentRates}
+          agentMsgRates={agentMsgRates}
           sessionCost={sessionCost}
           actualCost={actualCost}
           refundAmount={refundAmount}
@@ -1582,6 +1594,7 @@ function CloseModal({
   messages,
   graphClusters,
   agentRates,
+  agentMsgRates,
   sessionCost,
   actualCost,
   refundAmount,
@@ -1597,6 +1610,7 @@ function CloseModal({
   messages: Message[];
   graphClusters: GraphCluster[];
   agentRates: Record<string, number>;
+  agentMsgRates: Record<string, number>;
   sessionCost?: number | null;
   actualCost?: number | null;
   refundAmount?: number | null;
@@ -1609,17 +1623,25 @@ function CloseModal({
   const isSuccess = outcome === "SUCCESS";
   const color     = isSuccess ? "#22C55E" : "#F59E0B";
 
-  // Contribution breakdown
-  const agentMsgCounts = agents.map((a) => ({
-    agent: a,
-    count: messages.filter((m) => m.agentId === a.id && !m.isHuman && m.agentId !== "system").length,
-    cluster: graphClusters.find((c) => c.id === a.clusterId),
-    rate: agentRates[a.id] ?? 15,
-  }));
-  const totalMsgs = agentMsgCounts.reduce((s, a) => s + a.count, 0);
-  const totalCost = agentMsgCounts.reduce((s, a) => s + a.rate, 0);
-  const alcFee = Math.round(totalCost * 0.03 * 10) / 10;
-  const distributable = Math.round((totalCost - alcFee) * 10) / 10;
+  // Per-agent cost breakdown
+  const agentBreakdown = agents.map((a) => {
+    const msgCount = messages.filter((m) => m.agentId === a.id && !m.isHuman && m.agentId !== "system").length;
+    const sessionFee = agentRates[a.id] ?? 3;
+    const costPerMsg = agentMsgRates[a.id] ?? 1;
+    const variableCost = Math.round(msgCount * costPerMsg * 10) / 10;
+    const total = Math.round((sessionFee + variableCost) * 10) / 10;
+    return {
+      agent: a,
+      cluster: graphClusters.find((c) => c.id === a.clusterId),
+      msgCount,
+      sessionFee,
+      costPerMsg,
+      variableCost,
+      total,
+    };
+  });
+  const actualBase = Math.round(agentBreakdown.reduce((s, a) => s + a.total, 0) * 10) / 10;
+  const alcFee = Math.round(actualBase * 0.03 * 10) / 10;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
@@ -1674,42 +1696,48 @@ function CloseModal({
           </div>
         )}
 
-        {/* Contribution breakdown */}
+        {/* Cost breakdown per agent */}
         {agents.length > 0 && (
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 mb-4 overflow-hidden">
             <div className="px-4 py-2 border-b border-amber-400/15">
-              <p className="text-[10px] text-amber-400 uppercase tracking-wider font-bold">Contribution Breakdown</p>
+              <p className="text-[10px] text-amber-400 uppercase tracking-wider font-bold">Cost Breakdown</p>
             </div>
             <div className="px-3 py-2">
-              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1.5 items-center">
+              <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-2 gap-y-1.5 items-center">
                 <span className="text-[9px] text-al-muted uppercase tracking-wider">Agent</span>
                 <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Msgs</span>
-                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">%</span>
-                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Earned</span>
-                {agentMsgCounts.map(({ agent, count, cluster }) => {
-                  const pct = totalMsgs > 0 ? Math.round((count / totalMsgs) * 100) : Math.round(100 / agents.length);
-                  const earned = totalMsgs > 0
-                    ? Math.round((count / totalMsgs) * distributable * 10) / 10
-                    : Math.round((distributable / agents.length) * 10) / 10;
-                  return (
-                    <>
-                      <div key={`name-${agent.id}`} className="min-w-0">
-                        <div className="text-[11px] text-al-text truncate">{agent.label}</div>
-                        {cluster && (
-                          <div className="text-[9px] font-semibold" style={{ color: cluster.color }}>{cluster.name}</div>
-                        )}
-                      </div>
-                      <span key={`msgs-${agent.id}`} className="text-[11px] text-al-muted-2 tabular-nums text-right">{count}</span>
-                      <span key={`pct-${agent.id}`} className="text-[11px] text-al-text tabular-nums text-right">{pct}%</span>
-                      <span key={`earn-${agent.id}`} className="text-[11px] font-semibold text-amber-400 tabular-nums text-right">{earned}</span>
-                    </>
-                  );
-                })}
+                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Fixed</span>
+                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Msgs cost</span>
+                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Total</span>
+                {agentBreakdown.map(({ agent, cluster, msgCount, sessionFee, variableCost, total }) => (
+                  <>
+                    <div key={`name-${agent.id}`} className="min-w-0">
+                      <div className="text-[11px] text-al-text truncate">{agent.label}</div>
+                      {cluster && (
+                        <div className="text-[9px] font-semibold" style={{ color: cluster.color }}>{cluster.name}</div>
+                      )}
+                    </div>
+                    <span key={`msgs-${agent.id}`} className="text-[11px] text-al-muted-2 tabular-nums text-right">{msgCount}</span>
+                    <span key={`fee-${agent.id}`} className="text-[11px] text-al-muted-2 tabular-nums text-right">{sessionFee}</span>
+                    <span key={`var-${agent.id}`} className="text-[11px] text-al-muted-2 tabular-nums text-right">{variableCost}</span>
+                    <span key={`tot-${agent.id}`} className="text-[11px] font-semibold text-amber-400 tabular-nums text-right">{total}</span>
+                  </>
+                ))}
               </div>
             </div>
-            <div className="border-t border-amber-400/15 px-3 py-2 flex items-center justify-between">
-              <span className="text-[11px] text-al-muted">AgentLink fee (3%)</span>
-              <span className="text-[11px] text-al-muted tabular-nums">{alcFee} ALC</span>
+            <div className="border-t border-amber-400/15 px-3 py-1.5 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-al-muted">Subtotal</span>
+                <span className="text-[11px] text-al-text tabular-nums">{actualBase} ALC</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-al-muted">AgentLink fee (3%)</span>
+                <span className="text-[11px] text-al-muted tabular-nums">{alcFee} ALC</span>
+              </div>
+              <div className="flex items-center justify-between border-t border-amber-400/15 pt-1">
+                <span className="text-[11px] font-bold text-amber-400">Total actual cost</span>
+                <span className="text-[11px] font-bold text-amber-400 tabular-nums">{Math.round((actualBase + alcFee) * 10) / 10} ALC</span>
+              </div>
             </div>
           </div>
         )}
@@ -1722,12 +1750,12 @@ function CloseModal({
             </div>
             <div className="px-3 py-2 space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-al-muted">Estimated cost (blocked)</span>
+                <span className="text-[11px] text-al-muted">Maximum blocked</span>
                 <span className="text-[11px] text-al-text tabular-nums">{sessionCost} ALC</span>
               </div>
               {actualCost != null && (
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-al-muted">Actual cost (used)</span>
+                  <span className="text-[11px] text-al-muted">Actual cost</span>
                   <span className="text-[11px] text-al-text tabular-nums">{actualCost} ALC</span>
                 </div>
               )}

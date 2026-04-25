@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { Agent, SessionAgent, SessionRole } from "../lib/types";
 import AgentCard from "../components/AgentCard";
 import BuildSessionPanel from "../components/BuildSessionPanel";
+import { useCredits } from "../lib/credits";
 
 const FRAMEWORKS = ["All", "Claude", "LangChain", "AutoGen", "Custom"];
 
@@ -17,6 +18,7 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
   const [framework, setFramework] = useState("All");
   const [sessionAgents, setSessionAgents] = useState<SessionAgent[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const { balance } = useCredits();
 
   const filtered = useMemo(() => {
     return agents.filter((a) => {
@@ -72,7 +74,7 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
 
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
             <span className="text-base leading-none">💰</span>
-            <span className="text-sm font-semibold text-amber-400">100 ALC</span>
+            <span className="text-sm font-semibold text-amber-400">{balance} ALC</span>
           </div>
 
           {/* Mobile panel toggle */}
