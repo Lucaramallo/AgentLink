@@ -70,6 +70,11 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
             <Link href="/directory" className="text-al-accent font-medium">Directory</Link>
           </nav>
 
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+            <span className="text-base leading-none">💰</span>
+            <span className="text-sm font-semibold text-amber-400">100 ALC</span>
+          </div>
+
           {/* Mobile panel toggle */}
           <button
             className="sm:hidden flex items-center gap-1.5 text-xs text-al-muted-2 border border-al-border rounded-lg px-3 py-1.5"

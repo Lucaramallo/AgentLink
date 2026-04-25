@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { SessionRole } from "../../lib/types";
+import { useCredits } from "../../lib/credits";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -163,6 +164,111 @@ function systemMsg(content: string): Message {
   };
 }
 
+// ── Format detection & HTML rendering ─────────────────────────────────────
+
+function detectFormat(task: string): "html" | "csv" | "md" {
+  const t = task.toLowerCase();
+  if (/\b(html|web|webpage|landing)\b/.test(t)) return "html";
+  if (/\b(excel|spreadsheet|csv)\b/.test(t)) return "csv";
+  return "md";
+}
+
+function applyInline(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/`(.+?)`/g, "<code>$1</code>");
+}
+
+function markdownToHtml(md: string): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let inTable = false;
+
+  for (const line of lines) {
+    if (/^\|[-| :]+\|$/.test(line)) continue; // table separator
+    if (/^\|.+\|$/.test(line)) {
+      if (!inTable) { out.push("<table>"); inTable = true; }
+      const cells = line.slice(1, -1).split("|").map((c) => `<td>${applyInline(c.trim())}</td>`).join("");
+      out.push(`<tr>${cells}</tr>`);
+      continue;
+    }
+    if (inTable) { out.push("</table>"); inTable = false; }
+    if (/^### /.test(line)) { out.push(`<h3>${applyInline(line.slice(4))}</h3>`); continue; }
+    if (/^## /.test(line))  { out.push(`<h2>${applyInline(line.slice(3))}</h2>`); continue; }
+    if (/^# /.test(line))   { out.push(`<h1>${applyInline(line.slice(2))}</h1>`); continue; }
+    if (/^- /.test(line))   { out.push(`<li>${applyInline(line.slice(2))}</li>`); continue; }
+    if (/^---+$/.test(line)) { out.push("<hr>"); continue; }
+    if (line.trim() === "")  { out.push(""); continue; }
+    out.push(`<p>${applyInline(line)}</p>`);
+  }
+  if (inTable) out.push("</table>");
+  return out.join("\n");
+}
+
+function buildHtmlDeliverable(content: string, sessionId: string, teamItems: string, date: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentLink Deliverable — ${sessionId}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#070B14;color:#E8EAF0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.7;padding:48px 24px}
+  .container{max-width:800px;margin:0 auto}
+  header{border-bottom:1px solid #1E2D4A;padding-bottom:24px;margin-bottom:32px}
+  .logo{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:#4ECDC4;font-weight:700;margin-bottom:8px}
+  header h1{font-size:24px;font-weight:700}
+  .meta{margin-top:12px;display:flex;gap:24px;flex-wrap:wrap}
+  .meta span{font-size:12px;color:#64748B}
+  .meta strong{color:#94A3B8}
+  .team{background:rgba(78,205,196,.06);border:1px solid rgba(78,205,196,.2);border-radius:12px;padding:20px 24px;margin-bottom:32px}
+  .team-label{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#4ECDC4;margin-bottom:12px;font-weight:700}
+  .team ul{list-style:none;display:flex;flex-wrap:wrap;gap:8px}
+  .team li{font-size:13px;background:rgba(255,255,255,.05);border:1px solid #1E2D4A;border-radius:8px;padding:6px 12px;color:#CBD5E1}
+  .body{background:rgba(13,20,33,.7);border:1px solid #1E2D4A;border-radius:12px;padding:32px}
+  h1,h2,h3{color:#E8EAF0;margin:24px 0 12px}
+  h1{font-size:22px}h2{font-size:18px}h3{font-size:15px}
+  p{color:#CBD5E1;margin:10px 0}
+  li{color:#CBD5E1;margin:4px 0 4px 20px;list-style:disc}
+  table{border-collapse:collapse;width:100%;margin:16px 0}
+  td{border:1px solid #1E2D4A;padding:10px 14px;color:#CBD5E1;font-size:13px}
+  tr:first-child td{background:rgba(78,205,196,.08);color:#4ECDC4;font-weight:600}
+  hr{border:none;border-top:1px solid #1E2D4A;margin:24px 0}
+  strong{color:#E8EAF0}
+  code{background:rgba(78,205,196,.1);border:1px solid rgba(78,205,196,.2);border-radius:4px;padding:2px 6px;font-family:'SF Mono',monospace;font-size:12px;color:#4ECDC4}
+  footer{margin-top:48px;padding-top:24px;border-top:1px solid #1E2D4A;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+  footer span{font-size:11px;color:#475569}
+  .badge{background:rgba(78,205,196,.1);border:1px solid rgba(78,205,196,.25);border-radius:6px;padding:4px 10px;font-size:11px;color:#4ECDC4;font-weight:600}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="logo">AgentLink</div>
+    <h1>Session Deliverable</h1>
+    <div class="meta">
+      <span><strong>Session ID:</strong> ${sessionId}</span>
+      <span><strong>Date:</strong> ${date}</span>
+    </div>
+  </header>
+  <div class="team">
+    <div class="team-label">Team Composition</div>
+    <ul>${teamItems}</ul>
+  </div>
+  <div class="body">
+    ${markdownToHtml(content)}
+  </div>
+  <footer>
+    <span>Generated by AgentLink — Verified session log</span>
+    <span class="badge">Session ${sessionId}</span>
+  </footer>
+</div>
+</body>
+</html>`;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function SessionRoomClient() {
@@ -225,6 +331,12 @@ export default function SessionRoomClient() {
   // Flag set when we restore from sessionStorage — prevents API from overwriting
   const savedGraphLoadedRef = useRef(false);
 
+  // Agent rates from build page (nodeId → ALC/session)
+  const [agentRates, setAgentRates] = useState<Record<string, number>>({});
+  const [sessionCost, setSessionCost] = useState<number | null>(null);
+
+  const { balance } = useCredits();
+
   // ── Restore canvas layout from build page ───────────────────────────────
   useEffect(() => {
     const raw = sessionStorage.getItem("agentlink_session_graph");
@@ -232,10 +344,14 @@ export default function SessionRoomClient() {
     sessionStorage.removeItem("agentlink_session_graph");
     try {
       const saved = JSON.parse(raw) as {
+        sessionCost?: number;
+        agentRates?: Record<string, number>;
         nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean; clusterId?: string | null; isBuilder?: boolean }>;
         edges: Array<{ a: string; b: string }>;
         clusters?: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number }>;
       };
+      if (saved.sessionCost != null) setSessionCost(saved.sessionCost);
+      if (saved.agentRates) setAgentRates(saved.agentRates);
       const restoredNodes: GraphNode[] = saved.nodes.map((n) => ({
         id: n.id,
         x: n.x,
@@ -906,6 +1022,23 @@ export default function SessionRoomClient() {
 
   function downloadDeliverable(msg: Message) {
     const date = new Date().toISOString().split("T")[0];
+    const fmt  = detectFormat(taskDescription);
+
+    if (fmt === "html") {
+      const teamItems = graphNodes
+        .map((n) => `<li>${n.label} · ${n.role}${n.isHuman ? " · Human" : ""}</li>`)
+        .join("");
+      const html = buildHtmlDeliverable(msg.content, roomId, teamItems, date);
+      const blob = new Blob([html], { type: "text/html" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `AgentLink_Deliverable_${roomId}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
+
     const teamLines = graphNodes
       .map((n) => `- ${n.label} (${n.role}${n.isHuman ? " · Human" : ""})`)
       .join("\n");
@@ -925,20 +1058,24 @@ export default function SessionRoomClient() {
       `---`,
       `*Generated by AgentLink — Verified session log*`,
     ].join("\n");
-    const blob = new Blob([md], { type: "text/markdown" });
+
+    const ext  = fmt === "csv" ? "csv" : "md";
+    const mime = fmt === "csv" ? "text/csv" : "text/markdown";
+    const blob = new Blob([md], { type: mime });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = `AgentLink_Deliverable_${roomId}.md`;
+    a.download = `AgentLink_Deliverable_${roomId}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isClosed  = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
-  const step      = STATUS_STEP[status];
-  const agentNodes = graphNodes.filter((n) => !n.isHuman);
+  const isClosed      = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
+  const step          = STATUS_STEP[status];
+  const agentNodes    = graphNodes.filter((n) => !n.isHuman);
+  const deliverableExt = detectFormat(taskDescription);
 
   // Build nodeId → cluster lookup for team badges and tab filtering
   const clusterByNodeId = new Map<string, GraphCluster>(
@@ -972,7 +1109,13 @@ export default function SessionRoomClient() {
             Directory
           </Link>
           <span className="font-mono text-xs text-al-muted">{roomId}</span>
-          <StatusBadge status={status} />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+              <span className="text-base leading-none">💰</span>
+              <span className="text-sm font-semibold text-amber-400 tabular-nums">{balance} ALC</span>
+            </div>
+            <StatusBadge status={status} />
+          </div>
         </div>
       </header>
 
@@ -1118,6 +1261,7 @@ export default function SessionRoomClient() {
                 msg={msg}
                 roomId={roomId}
                 cluster={clusterByNodeId.get(msg.agentId)}
+                deliverableExt={deliverableExt}
                 onDownloadDeliverable={msg.type === "DELIVERABLE" ? downloadDeliverable : undefined}
               />
             ))}
@@ -1214,7 +1358,12 @@ export default function SessionRoomClient() {
           outcome={outcome}
           roomId={roomId}
           agents={agentNodes}
+          messages={messages}
+          graphClusters={graphClusters}
+          agentRates={agentRates}
+          sessionCost={sessionCost}
           deliverable={deliverableMsg}
+          deliverableExt={deliverableExt}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
@@ -1251,11 +1400,13 @@ function MessageBubble({
   msg,
   roomId,
   cluster,
+  deliverableExt = "md",
   onDownloadDeliverable,
 }: {
   msg: Message;
   roomId: string;
   cluster?: GraphCluster;
+  deliverableExt?: string;
   onDownloadDeliverable?: (msg: Message) => void;
 }) {
   const rc  = msg.isHuman ? HUMAN_COLOR : (ROLE_COLOR[msg.role] ?? "#64748B");
@@ -1329,7 +1480,7 @@ function MessageBubble({
               <path strokeLinecap="round" strokeWidth={1.5} d="M10 3v10m0 0l-3.5-3.5M10 13l3.5-3.5M3 17h14" />
             </svg>
             <span>
-              Download deliverable · <span className="opacity-70">AgentLink_Deliverable_{roomId}.md</span>
+              Download deliverable · <span className="opacity-70">AgentLink_Deliverable_{roomId}.{deliverableExt}</span>
             </span>
           </button>
         )}
@@ -1374,7 +1525,12 @@ function CloseModal({
   outcome,
   roomId,
   agents,
+  messages,
+  graphClusters,
+  agentRates,
+  sessionCost,
   deliverable,
+  deliverableExt = "md",
   onDownloadDeliverable,
   onDownload,
   onClose,
@@ -1382,13 +1538,30 @@ function CloseModal({
   outcome: "SUCCESS" | "DISPUTED";
   roomId: string;
   agents: GraphNode[];
+  messages: Message[];
+  graphClusters: GraphCluster[];
+  agentRates: Record<string, number>;
+  sessionCost?: number | null;
   deliverable?: Message | null;
+  deliverableExt?: string;
   onDownloadDeliverable?: (msg: Message) => void;
   onDownload: () => void;
   onClose: () => void;
 }) {
   const isSuccess = outcome === "SUCCESS";
   const color     = isSuccess ? "#22C55E" : "#F59E0B";
+
+  // Contribution breakdown
+  const agentMsgCounts = agents.map((a) => ({
+    agent: a,
+    count: messages.filter((m) => m.agentId === a.id && !m.isHuman && m.agentId !== "system").length,
+    cluster: graphClusters.find((c) => c.id === a.clusterId),
+    rate: agentRates[a.id] ?? 15,
+  }));
+  const totalMsgs = agentMsgCounts.reduce((s, a) => s + a.count, 0);
+  const totalCost = agentMsgCounts.reduce((s, a) => s + a.rate, 0);
+  const alcFee = Math.round(totalCost * 0.08 * 10) / 10;
+  const distributable = Math.round((totalCost - alcFee) * 10) / 10;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
@@ -1443,6 +1616,54 @@ function CloseModal({
           </div>
         )}
 
+        {/* Contribution breakdown */}
+        {agents.length > 0 && (
+          <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 mb-4 overflow-hidden">
+            <div className="px-4 py-2 border-b border-amber-400/15">
+              <p className="text-[10px] text-amber-400 uppercase tracking-wider font-bold">Contribution Breakdown</p>
+            </div>
+            <div className="px-3 py-2">
+              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1.5 items-center">
+                <span className="text-[9px] text-al-muted uppercase tracking-wider">Agent</span>
+                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Msgs</span>
+                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">%</span>
+                <span className="text-[9px] text-al-muted uppercase tracking-wider text-right">Earned</span>
+                {agentMsgCounts.map(({ agent, count, cluster }) => {
+                  const pct = totalMsgs > 0 ? Math.round((count / totalMsgs) * 100) : Math.round(100 / agents.length);
+                  const earned = totalMsgs > 0
+                    ? Math.round((count / totalMsgs) * distributable * 10) / 10
+                    : Math.round((distributable / agents.length) * 10) / 10;
+                  return (
+                    <>
+                      <div key={`name-${agent.id}`} className="min-w-0">
+                        <div className="text-[11px] text-al-text truncate">{agent.label}</div>
+                        {cluster && (
+                          <div className="text-[9px] font-semibold" style={{ color: cluster.color }}>{cluster.name}</div>
+                        )}
+                      </div>
+                      <span key={`msgs-${agent.id}`} className="text-[11px] text-al-muted-2 tabular-nums text-right">{count}</span>
+                      <span key={`pct-${agent.id}`} className="text-[11px] text-al-text tabular-nums text-right">{pct}%</span>
+                      <span key={`earn-${agent.id}`} className="text-[11px] font-semibold text-amber-400 tabular-nums text-right">{earned}</span>
+                    </>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="border-t border-amber-400/15 px-3 py-2 flex items-center justify-between">
+              <span className="text-[11px] text-al-muted">AgentLink fee (8%)</span>
+              <span className="text-[11px] text-al-muted tabular-nums">{alcFee} ALC</span>
+            </div>
+          </div>
+        )}
+
+        {/* Session cost */}
+        {sessionCost != null && (
+          <div className="mb-4 flex items-center justify-between px-3 py-2.5 bg-amber-400/5 border border-amber-400/20 rounded-xl">
+            <span className="text-xs text-al-muted">Session cost deducted</span>
+            <span className="text-sm font-bold text-amber-400 tabular-nums">{sessionCost} ALC</span>
+          </div>
+        )}
+
         {/* Room ID reference */}
         <div className="mb-5 px-3 py-2 bg-al-bg rounded-lg border border-al-border">
           <p className="text-[10px] text-al-muted mb-1">Session ID</p>
@@ -1464,7 +1685,7 @@ function CloseModal({
               <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
                 <path strokeLinecap="round" strokeWidth={1.5} d="M8 2v8m0 0L5 7m3 3l3-3M2 13h12" />
               </svg>
-              Download Deliverable (.md)
+              Download Deliverable (.{deliverableExt})
             </button>
           )}
           <div className="flex gap-3">

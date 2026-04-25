@@ -5,6 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Agent, SessionRole } from "../../lib/types";
 import { fetchAgents } from "../../lib/api";
+import { agentRate } from "../../lib/rates";
+import { useCredits } from "../../lib/credits";
 
 const API_BASE = "http://192.168.0.104:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
@@ -195,6 +197,11 @@ export default function SessionBuildClient() {
   // Open session
   const [openLoading, setOpenLoading] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [showCostModal, setShowCostModal] = useState(false);
+  const [agentAddedToast, setAgentAddedToast] = useState<string | null>(null);
+  const agentAddedToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { balance, deduct } = useCredits();
 
   // Keep refs in sync with state
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -812,6 +819,11 @@ export default function SessionBuildClient() {
     ]);
     setShowPicker(false);
     setPickerSearch("");
+
+    const rate = agentRate(agent.reputationTech, agent.reputationRel);
+    setAgentAddedToast(`Agent added · +${rate} ALC to session cost`);
+    if (agentAddedToastTimer.current) clearTimeout(agentAddedToastTimer.current);
+    agentAddedToastTimer.current = setTimeout(() => setAgentAddedToast(null), 2500);
   }
 
   function addHumanNode() {
@@ -862,7 +874,19 @@ export default function SessionBuildClient() {
 
   // ── Open Session ─────────────────────────────────────────────────────────
 
-  async function openSession() {
+  function computeSessionCost(): number {
+    const billable = nodes.filter((n) => !n.isHuman);
+    const subtotal = billable.reduce((s, n) => s + agentRate(n.agent.reputationTech, n.agent.reputationRel), 0);
+    const fee = Math.round(subtotal * 0.08 * 10) / 10;
+    return Math.round((subtotal + fee) * 10) / 10;
+  }
+
+  function openSession() {
+    if (!canOpen || openLoading) return;
+    setShowCostModal(true);
+  }
+
+  async function doOpenSession() {
     setOpenLoading(true);
     setOpenError(null);
     try {
@@ -915,9 +939,16 @@ export default function SessionBuildClient() {
       if (!roomRes.ok) throw new Error(`Failed to open room (${roomRes.status})`);
       const { room_id } = await roomRes.json();
 
+      const rateMap: Record<string, number> = {};
+      nodes.forEach((n) => {
+        rateMap[n.id] = agentRate(n.agent.reputationTech, n.agent.reputationRel);
+      });
+
       sessionStorage.setItem(
         "agentlink_session_graph",
         JSON.stringify({
+          sessionCost: computeSessionCost(),
+          agentRates: rateMap,
           nodes: nodes.map((n) => ({
             id: n.id,
             agentId: n.agent.id,
@@ -1011,7 +1042,12 @@ export default function SessionBuildClient() {
             </svg>
             Directory
           </Link>
-          <button
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+              <span className="text-base leading-none">💰</span>
+              <span className="text-sm font-semibold text-amber-400 tabular-nums">{balance} ALC</span>
+            </div>
+            <button
             disabled={!canOpen || openLoading}
             onClick={openSession}
             className={`
@@ -1030,6 +1066,7 @@ export default function SessionBuildClient() {
             )}
             Open Session
           </button>
+          </div>
         </div>
       </header>
 
@@ -1574,6 +1611,55 @@ export default function SessionBuildClient() {
                 </button>
               </div>
             </section>
+
+            {/* § 3 — Session Cost Estimate */}
+            {(() => {
+              const billableNodes = nodes.filter((n) => !n.isHuman);
+              if (billableNodes.length === 0) return null;
+              const lineItems = billableNodes.map((n) => ({
+                name: n.agent.name,
+                rate: agentRate(n.agent.reputationTech, n.agent.reputationRel),
+              }));
+              const subtotal = lineItems.reduce((s, l) => s + l.rate, 0);
+              const fee = Math.round(subtotal * 0.08 * 10) / 10;
+              const grandTotal = Math.round((subtotal + fee) * 10) / 10;
+              return (
+                <section>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold text-al-muted uppercase tracking-widest">
+                      Session Cost Estimate
+                    </span>
+                    <span className="text-[9px] text-amber-400 bg-amber-400/10 border border-amber-400/25 px-1.5 py-0.5 rounded">
+                      ALC
+                    </span>
+                  </div>
+                  <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 overflow-hidden">
+                    <div className="px-3 py-2 space-y-1.5">
+                      {lineItems.map((item) => (
+                        <div key={item.name} className="flex items-center justify-between">
+                          <span className="text-[11px] text-al-muted-2 truncate max-w-[160px]">{item.name}</span>
+                          <span className="text-[11px] text-al-text tabular-nums">{item.rate} ALC</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="border-t border-amber-400/15 px-3 py-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-al-muted">Subtotal</span>
+                        <span className="text-[11px] text-al-text tabular-nums">{subtotal} ALC</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-al-muted">AgentLink fee (8%)</span>
+                        <span className="text-[11px] text-al-muted tabular-nums">{fee} ALC</span>
+                      </div>
+                    </div>
+                    <div className="border-t border-amber-400/20 px-3 py-2 flex items-center justify-between bg-amber-400/8">
+                      <span className="text-[11px] font-bold text-amber-400">Grand Total</span>
+                      <span className="text-[13px] font-bold text-amber-400 tabular-nums">{grandTotal} ALC</span>
+                    </div>
+                  </div>
+                </section>
+              );
+            })()}
           </div>
 
           {/* Open Session */}
@@ -1623,6 +1709,114 @@ export default function SessionBuildClient() {
           </button>
         </div>
       )}
+
+      {/* Agent-added toast */}
+      {agentAddedToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 bg-al-surface border border-al-accent/40 text-al-accent text-sm rounded-xl px-4 py-3 shadow-2xl pointer-events-none select-none">
+          <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+            <path strokeLinecap="round" strokeWidth={1.5} d="M8 3v10M3 8h10" />
+          </svg>
+          {agentAddedToast}
+        </div>
+      )}
+
+      {/* Cost confirmation modal */}
+      {showCostModal && (
+        <CostConfirmModal
+          cost={computeSessionCost()}
+          balance={balance}
+          onConfirm={() => {
+            deduct(computeSessionCost());
+            setShowCostModal(false);
+            doOpenSession();
+          }}
+          onCancel={() => setShowCostModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Cost Confirmation Modal ─────────────────────────────────────────────────
+
+function CostConfirmModal({
+  cost,
+  balance,
+  onConfirm,
+  onCancel,
+}: {
+  cost: number;
+  balance: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const afterBalance = Math.round((balance - cost) * 10) / 10;
+  const insufficient = balance < cost;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
+      <div
+        className="bg-al-surface border border-al-border rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6"
+        style={{ boxShadow: "0 0 60px rgba(78,205,196,0.08)" }}
+      >
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center bg-amber-400/10 border border-amber-400/30">
+            <span className="text-lg leading-none">💰</span>
+          </div>
+          <h2 className="text-base font-bold text-al-text">Confirm Session Cost</h2>
+        </div>
+
+        <div className="space-y-3 mb-5">
+          <div className="bg-al-bg border border-al-border rounded-xl p-4 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-al-muted">Session cost</span>
+              <span className="text-sm font-bold text-amber-400 tabular-nums">{cost} ALC</span>
+            </div>
+            <div className="flex items-center justify-between border-t border-al-border pt-2.5">
+              <span className="text-xs text-al-muted">Current balance</span>
+              <span className="text-sm text-al-text tabular-nums">{balance} ALC</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-al-muted">Balance after</span>
+              <span
+                className="text-sm font-semibold tabular-nums"
+                style={{ color: insufficient ? "#EF4444" : "#4ECDC4" }}
+              >
+                {insufficient ? "—" : `${afterBalance} ALC`}
+              </span>
+            </div>
+          </div>
+
+          {insufficient && (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/30">
+              <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                <path strokeLinecap="round" strokeWidth={1.5} d="M8 5v4m0 2.5h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0z" />
+              </svg>
+              <span className="text-xs text-red-400 font-medium">Insufficient credits</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-2.5">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2 rounded-lg text-sm text-al-muted bg-al-bg border border-al-border hover:border-al-accent/40 hover:text-al-text transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={insufficient}
+            className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{
+              background: insufficient ? "rgba(78,205,196,0.1)" : "#4ECDC4",
+              color: insufficient ? "#4ECDC4" : "#070B14",
+            }}
+          >
+            Confirm &amp; Pay {cost} ALC
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
