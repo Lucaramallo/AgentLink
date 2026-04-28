@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import admin, agents, auth, demo, reputation, rooms, websocket
+from app.routers import admin, agent_respond, agents, auth, reputation, rooms, websocket
 
 app = FastAPI(
     title=settings.app_name,
@@ -27,7 +27,7 @@ app.include_router(agents.router, prefix=f"/api/{settings.api_version}")
 app.include_router(admin.router, prefix=f"/api/{settings.api_version}")
 app.include_router(rooms.router, prefix=f"/api/{settings.api_version}")
 app.include_router(reputation.router, prefix=f"/api/{settings.api_version}")
-app.include_router(demo.router, prefix=f"/api/{settings.api_version}")
+app.include_router(agent_respond.router, prefix=f"/api/{settings.api_version}")
 app.include_router(websocket.router)
 
 

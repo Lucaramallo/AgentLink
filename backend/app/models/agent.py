@@ -56,6 +56,11 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    session_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_per_message: Mapped[float | None] = mapped_column(Float, nullable=True)
+    github_repo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
