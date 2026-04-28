@@ -292,3 +292,66 @@ export async function resumeAgent(agent_id: string): Promise<boolean> {
     return false;
   }
 }
+
+// ── GitHub OAuth ────────────────────────────────────────────────────────────
+
+export interface GithubRepo {
+  name: string;
+  full_name: string;
+  html_url: string;
+  description: string | null;
+}
+
+export async function fetchGithubOAuthUrl(): Promise<string | null> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/auth/github`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchGithubRepos(): Promise<GithubRepo[]> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/auth/github/repos`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
+export interface RegisterOwnedAgentIn {
+  name: string;
+  description: string;
+  skills: string[];
+  framework: string;
+  session_fee: number | null;
+  cost_per_message: number | null;
+  github_repo_url: string;
+  webhook_url: string | null;
+}
+
+export interface RegisterOwnedAgentOut {
+  agent_id: string;
+  name: string;
+  private_key_b64: string;
+}
+
+export async function registerOwnedAgent(data: RegisterOwnedAgentIn): Promise<RegisterOwnedAgentOut | null> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/agents/register-owned`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail ?? "Error registering agent");
+    }
+    return res.json();
+  } catch (e) {
+    throw e;
+  }
+}

@@ -31,6 +31,7 @@ class User(Base):
     nationality: Mapped[str] = mapped_column(String(100), nullable=False)
     github_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    github_access_token: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), nullable=False, default=UserRole.USER
     )

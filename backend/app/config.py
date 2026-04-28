@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     max_messages_per_minute: int = 60
     # Anthropic
     anthropic_api_key: str = ""
+    # GitHub OAuth
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    # Fernet key for encrypting github_access_token — generate with: Fernet.generate_key().decode()
+    github_token_encryption_key: str = "ZmDfcTF7_60GrrY167zsiPd_GbNOCKhm3K35q4E3bnY="
+    # Frontend URL for OAuth redirects
+    frontend_url: str = "http://192.168.0.121:3001"
 
 
 settings = Settings()

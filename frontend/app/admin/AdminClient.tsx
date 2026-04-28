@@ -12,10 +12,14 @@ import {
   updateAgent,
   pauseAgent,
   resumeAgent,
+  fetchGithubOAuthUrl,
+  fetchGithubRepos,
+  registerOwnedAgent,
   type AdminAgent,
   type AdminSession,
   type MyStats,
   type RankingEntry,
+  type GithubRepo,
 } from "../lib/api";
 
 type Tab = "dashboard" | "agents" | "ranking" | "sessions";
@@ -114,6 +118,17 @@ export default function AdminClient() {
   });
   const [editSaving, setEditSaving] = useState(false);
 
+  // Register Agent modal state
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [githubRepos, setGithubRepos] = useState<GithubRepo[]>([]);
+  const [registerForm, setRegisterForm] = useState({
+    name: "", description: "", skills: "", framework: "claude",
+    session_fee: "", cost_per_message: "", github_repo_url: "", webhook_url: "",
+  });
+  const [registerSaving, setRegisterSaving] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registerSuccess, setRegisterSuccess] = useState<string | null>(null);
+
   useEffect(() => {
     if (authLoading) return;
     if (!isAuthenticated) {
@@ -207,6 +222,48 @@ export default function AdminClient() {
     }
   }
 
+  async function connectGithub() {
+    const url = await fetchGithubOAuthUrl();
+    if (url) window.location.href = url;
+  }
+
+  async function openRegisterModal() {
+    setRegisterError(null);
+    setRegisterSuccess(null);
+    setRegisterForm({ name: "", description: "", skills: "", framework: "claude", session_fee: "", cost_per_message: "", github_repo_url: "", webhook_url: "" });
+    setShowRegisterModal(true);
+    const repos = await fetchGithubRepos();
+    setGithubRepos(repos);
+    if (repos.length > 0) {
+      setRegisterForm(f => ({ ...f, github_repo_url: repos[0].html_url }));
+    }
+  }
+
+  async function submitRegisterAgent() {
+    setRegisterSaving(true);
+    setRegisterError(null);
+    try {
+      const result = await registerOwnedAgent({
+        name: registerForm.name,
+        description: registerForm.description,
+        skills: registerForm.skills.split(",").map(s => s.trim()).filter(Boolean),
+        framework: registerForm.framework,
+        session_fee: registerForm.session_fee !== "" ? parseFloat(registerForm.session_fee) : null,
+        cost_per_message: registerForm.cost_per_message !== "" ? parseFloat(registerForm.cost_per_message) : null,
+        github_repo_url: registerForm.github_repo_url,
+        webhook_url: registerForm.webhook_url || null,
+      });
+      if (result) {
+        setRegisterSuccess(`Agent registered! Save your private key — shown only once:\n${result.private_key_b64}`);
+        fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
+      }
+    } catch (e: unknown) {
+      setRegisterError(e instanceof Error ? e.message : "Error registering agent");
+    } finally {
+      setRegisterSaving(false);
+    }
+  }
+
   async function togglePause(a: AdminAgent) {
     if (a.is_active) {
       await pauseAgent(a.agent_id);
@@ -223,6 +280,8 @@ export default function AdminClient() {
       </div>
     );
   }
+
+  const githubConnected = !!user?.github_username;
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "#070B14", color: "#E2E8F0", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
@@ -366,8 +425,138 @@ export default function AdminClient() {
         </div>
       )}
 
+      {/* Register Agent modal */}
+      {showRegisterModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 14, padding: "32px", width: 540, maxHeight: "90vh", overflowY: "auto" }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: "#E2E8F0" }}>Register New Agent</h2>
+
+            {!githubConnected ? (
+              <div style={{ color: "#F59E0B", fontSize: 14, marginBottom: 20 }}>
+                Connect your GitHub account first to register agents.
+              </div>
+            ) : registerSuccess ? (
+              <div>
+                <div style={{ color: "#4ECDC4", fontSize: 14, marginBottom: 12 }}>Agent registered successfully!</div>
+                <div style={{ background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: 14, fontSize: 12, color: "#F59E0B", wordBreak: "break-all", whiteSpace: "pre-wrap" }}>
+                  {registerSuccess}
+                </div>
+                <button
+                  onClick={() => setShowRegisterModal(false)}
+                  style={{ marginTop: 20, background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <>
+                {[
+                  { key: "name", label: "Name" },
+                  { key: "description", label: "Description" },
+                  { key: "skills", label: "Skills (comma-separated)" },
+                  { key: "webhook_url", label: "Webhook URL" },
+                ].map(({ key, label }) => (
+                  <div key={key} style={{ marginBottom: 14 }}>
+                    <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>{label}</label>
+                    <input
+                      value={registerForm[key as keyof typeof registerForm]}
+                      onChange={e => setRegisterForm(f => ({ ...f, [key]: e.target.value }))}
+                      style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, boxSizing: "border-box" }}
+                    />
+                  </div>
+                ))}
+
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>Framework</label>
+                  <select
+                    value={registerForm.framework}
+                    onChange={e => setRegisterForm(f => ({ ...f, framework: e.target.value }))}
+                    style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13 }}
+                  >
+                    {["claude", "langchain", "autogen", "custom"].map(fw => (
+                      <option key={fw} value={fw}>{fw}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>GitHub Repo</label>
+                  {githubRepos.length === 0 ? (
+                    <div style={{ color: "#64748B", fontSize: 12 }}>Loading repos…</div>
+                  ) : (
+                    <select
+                      value={registerForm.github_repo_url}
+                      onChange={e => setRegisterForm(f => ({ ...f, github_repo_url: e.target.value }))}
+                      style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13 }}
+                    >
+                      {githubRepos.map(r => (
+                        <option key={r.full_name} value={r.html_url}>{r.full_name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {(["session_fee", "cost_per_message"] as const).map(field => (
+                  <div key={field} style={{ marginBottom: 14 }}>
+                    <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>
+                      {field === "session_fee" ? "Session Fee (ALC)" : "Cost per Message (ALC)"}
+                    </label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={registerForm[field]}
+                      onChange={e => setRegisterForm(f => ({ ...f, [field]: e.target.value }))}
+                      style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, boxSizing: "border-box" }}
+                    />
+                  </div>
+                ))}
+
+                {registerError && (
+                  <div style={{ color: "#EF4444", fontSize: 13, marginBottom: 12 }}>{registerError}</div>
+                )}
+
+                <div style={{ display: "flex", gap: 10, marginTop: 24, justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => setShowRegisterModal(false)}
+                    style={{ background: "transparent", border: "1px solid #1E2D4A", color: "#94A3B8", padding: "8px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={submitRegisterAgent}
+                    disabled={registerSaving || !registerForm.name || !registerForm.github_repo_url}
+                    style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: registerSaving ? "not-allowed" : "pointer", opacity: registerSaving ? 0.7 : 1 }}
+                  >
+                    {registerSaving ? "Registering…" : "Register Agent"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Main content */}
       <main style={{ flex: 1, padding: "32px 40px", overflowY: "auto" }}>
+        {/* ── GITHUB CONNECT BANNER ─────────────────────── */}
+        {!githubConnected && (
+          <div style={{
+            background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)",
+            borderRadius: 10, padding: "14px 20px", marginBottom: 24,
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
+          }}>
+            <div>
+              <span style={{ color: "#F59E0B", fontWeight: 600, fontSize: 14 }}>Connect your GitHub account</span>
+              <span style={{ color: "#94A3B8", fontSize: 13, marginLeft: 10 }}>Required to register agents and verify repo ownership.</span>
+            </div>
+            <button
+              onClick={connectGithub}
+              style={{ background: "#F59E0B", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Connect GitHub
+            </button>
+          </div>
+        )}
+
         {/* ── DASHBOARD ──────────────────────────────────── */}
         {tab === "dashboard" && (
           <div>
@@ -413,7 +602,19 @@ export default function AdminClient() {
         {/* ── MY AGENTS ──────────────────────────────────── */}
         {tab === "agents" && (
           <div>
-            <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>My Agents</h1>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <h1 style={{ fontSize: 24, fontWeight: 700 }}>My Agents</h1>
+              <button
+                onClick={githubConnected ? openRegisterModal : connectGithub}
+                style={{
+                  background: githubConnected ? "#4ECDC4" : "#F59E0B",
+                  border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8,
+                  fontSize: 13, fontWeight: 600, cursor: "pointer",
+                }}
+              >
+                {githubConnected ? "+ Register New Agent" : "Connect GitHub First"}
+              </button>
+            </div>
             <p style={{ color: "#64748B", marginBottom: 24, fontSize: 14 }}>Manage and monitor all agents you own.</p>
 
             <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
