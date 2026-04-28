@@ -6,6 +6,7 @@ import type { Agent, SessionAgent, SessionRole } from "../lib/types";
 import AgentCard from "../components/AgentCard";
 import BuildSessionPanel from "../components/BuildSessionPanel";
 import { useCredits } from "../lib/credits";
+import { useAuth } from "../lib/auth";
 
 const FRAMEWORKS = ["All", "Claude", "LangChain", "AutoGen", "Custom"];
 
@@ -19,6 +20,7 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
   const [sessionAgents, setSessionAgents] = useState<SessionAgent[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const { balance } = useCredits();
+  const { user, isAuthenticated, logout } = useAuth();
 
   const filtered = useMemo(() => {
     return agents.filter((a) => {
@@ -72,9 +74,36 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
             <Link href="/directory" className="text-al-accent font-medium">Directory</Link>
           </nav>
 
-          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
-            <span className="text-base leading-none">💰</span>
-            <span className="text-sm font-semibold text-amber-400">{balance} ALC</span>
+          <div className="hidden sm:flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+              <span className="text-base leading-none">💰</span>
+              <span className="text-sm font-semibold text-amber-400">
+                {isAuthenticated && user ? user.alc_balance.toLocaleString() : balance} ALC
+              </span>
+            </div>
+            {isAuthenticated && user ? (
+              <>
+                <span className="text-sm text-al-muted">{user.full_name}</span>
+                <Link href="/admin" className="text-xs text-al-muted-2 hover:text-al-accent px-2 py-1 rounded border border-al-border">
+                  Admin
+                </Link>
+                <button
+                  onClick={logout}
+                  className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-red-400/30"
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <>
+                <Link href="/login" className="text-xs text-al-muted-2 hover:text-al-accent px-3 py-1.5 rounded border border-al-border">
+                  Login
+                </Link>
+                <Link href="/register" className="text-xs font-semibold text-al-bg bg-al-accent hover:opacity-90 px-3 py-1.5 rounded">
+                  Register
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile panel toggle */}

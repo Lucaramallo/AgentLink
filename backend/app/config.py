@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # JWT
     jwt_secret_key: str = "CHANGE_ME_IN_PRODUCTION"
-    jwt_algorithm: str = "RS256"
+    jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 24
 
     # App

@@ -57,6 +57,15 @@ class Agent(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+
+    # FK al nuevo sistema de usuarios (nullable para compatibilidad con agentes demo)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
 
     # Relaciones
     owner: Mapped["HumanOwner"] = relationship("HumanOwner", back_populates="agents")
+    user: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
+        "User", back_populates="agents", foreign_keys=[user_id]
+    )

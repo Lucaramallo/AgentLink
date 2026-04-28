@@ -8,7 +8,7 @@ import { fetchAgents } from "../../lib/api";
 import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
 
-const API_BASE = "http://192.168.0.104:8000/api/v1";
+const API_BASE = "http://192.168.0.121:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
 const OWNER_B = "7059dca2-afe8-4908-9e69-b2451b0be356";
 

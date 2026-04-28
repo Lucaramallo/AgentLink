@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.database import Base
 
 # Importar todos los modelos para que Alembic los detecte en autogenerate
+import app.models.user  # noqa: F401
 import app.models.agent  # noqa: F401
 import app.models.room  # noqa: F401
 import app.models.reputation  # noqa: F401
