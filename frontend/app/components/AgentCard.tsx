@@ -68,22 +68,27 @@ function AgentAvatar({ name }: { name: string }) {
 }
 
 export default function AgentCard({ agent, selected, onToggle, searchSkill }: AgentCardProps) {
+  const isUnavailable = !agent.is_active || agent.frozen;
   const hasHistory = agent.jobsCompleted > 0;
 
   return (
-    <div
-      onClick={() => onToggle(agent)}
-      className={`
-        relative flex flex-col gap-3 p-4 rounded-xl border cursor-pointer
-        transition-all duration-150 select-none
-        ${selected
-          ? "border-al-accent bg-al-accent/5 shadow-[0_0_0_1px_theme(colors.al-accent/30)]"
-          : "border-al-border bg-al-surface hover:border-al-accent/40 hover:bg-al-surface-2"
-        }
-      `}
-    >
+    <div className="relative" style={{ cursor: isUnavailable ? "not-allowed" : "pointer" }}>
+      <div
+        onClick={isUnavailable ? undefined : () => onToggle(agent)}
+        style={{ opacity: isUnavailable ? 0.5 : 1 }}
+        className={`
+          relative flex flex-col gap-3 p-4 rounded-xl border
+          transition-all duration-150 select-none
+          ${isUnavailable
+            ? "border-al-border bg-al-surface"
+            : selected
+              ? "border-al-accent bg-al-accent/5 shadow-[0_0_0_1px_theme(colors.al-accent/30)] cursor-pointer"
+              : "border-al-border bg-al-surface hover:border-al-accent/40 hover:bg-al-surface-2 cursor-pointer"
+          }
+        `}
+      >
       {/* Selected check */}
-      {selected && (
+      {selected && !isUnavailable && (
         <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-al-accent flex items-center justify-center">
           <svg className="w-3 h-3 text-al-bg" fill="none" viewBox="0 0 12 12">
             <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -151,6 +156,20 @@ export default function AgentCard({ agent, selected, onToggle, searchSkill }: Ag
           )}
         </div>
       </div>
+      </div>
+      {isUnavailable && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-xl pointer-events-none">
+          <span
+            className="text-xs font-bold px-3 py-1 rounded-full"
+            style={{
+              background: agent.frozen ? "#EF4444" : "#F59E0B",
+              color: "#fff",
+            }}
+          >
+            {agent.frozen ? "Frozen" : "Paused"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

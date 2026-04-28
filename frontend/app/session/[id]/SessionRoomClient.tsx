@@ -882,7 +882,7 @@ export default function SessionRoomClient() {
       type: MessageType,
     ): Promise<Message | null> {
       try {
-        const res = await fetch(`${API}/demo/respond`, {
+        const res = await fetch(`${API}/agents/respond`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1058,7 +1058,7 @@ export default function SessionRoomClient() {
     const nonHumanAgents = currentNodes
       .filter((n) => !n.isHuman)
       .map((n) => ({ id: n.id, name: n.label, role: n.role }));
-    fetch(`${API}/demo/sessions/${roomId}/peer-review`, {
+    fetch(`${API}/agents/sessions/${roomId}/peer-review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

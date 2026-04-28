@@ -53,7 +53,7 @@ const HUMAN_STUB: Agent = {
   reputationRel: null,
   jobsCompleted: 0,
   total_jobs_disputed: 0,
-  is_active: true,
+  is_active: true, frozen: false,
 };
 
 const HUMAN_COLOR = "#F0A500";

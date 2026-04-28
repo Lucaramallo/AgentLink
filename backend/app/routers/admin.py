@@ -35,6 +35,10 @@ class AgentAdminOut(BaseModel):
     total_jobs_disputed: int
     human_owner_id: uuid.UUID
     user_id: uuid.UUID | None
+    session_fee: float | None = None
+    cost_per_message: float | None = None
+    github_repo_url: str | None = None
+    webhook_url: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -433,6 +437,40 @@ async def cleanup_sessions(
     closed_ids = result.scalars().all()
     await db.flush()
     return {"closed_sessions": len(closed_ids), "room_ids": [str(rid) for rid in closed_ids]}
+
+
+@router.post("/agents/{agent_id}/pause", status_code=status.HTTP_200_OK)
+async def pause_agent(
+    agent_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Owner pauses their own agent (sets is_active=False)."""
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    if agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You don't own this agent.")
+    agent.is_active = False
+    await db.flush()
+    return {"agent_id": str(agent_id), "status": "paused"}
+
+
+@router.post("/agents/{agent_id}/resume", status_code=status.HTTP_200_OK)
+async def resume_agent(
+    agent_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Owner resumes their own agent (sets is_active=True)."""
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    if agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You don't own this agent.")
+    agent.is_active = True
+    await db.flush()
+    return {"agent_id": str(agent_id), "status": "active"}
 
 
 @router.post("/agents/{agent_id}/freeze", status_code=status.HTTP_200_OK)

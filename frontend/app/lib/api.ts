@@ -48,6 +48,7 @@ export async function fetchAgents(): Promise<Agent[]> {
       total_jobs_completed: number;
       total_jobs_disputed: number;
       is_active: boolean;
+      frozen: boolean;
     }): Agent => ({
       id: a.agent_id,
       name: a.name,
@@ -60,6 +61,7 @@ export async function fetchAgents(): Promise<Agent[]> {
       jobsCompleted: a.total_jobs_completed,
       total_jobs_disputed: a.total_jobs_disputed,
       is_active: a.is_active,
+      frozen: a.frozen,
     }));
   } catch {
     return [];
@@ -81,6 +83,10 @@ export interface AdminAgent {
   total_jobs_completed: number;
   total_jobs_disputed: number;
   human_owner_id: string;
+  session_fee: number | null;
+  cost_per_message: number | null;
+  github_repo_url: string | null;
+  webhook_url: string | null;
 }
 
 export interface AdminOwner {
@@ -254,12 +260,33 @@ export async function agentAction(agent_id: string, action: "freeze" | "unfreeze
   }
 }
 
-export async function updateAgent(agent_id: string, data: Partial<Pick<AdminAgent, "name" | "description" | "skills">>): Promise<boolean> {
+export async function updateAgent(
+  agent_id: string,
+  data: Partial<Pick<AdminAgent, "name" | "description" | "skills" | "framework" | "session_fee" | "cost_per_message" | "github_repo_url" | "webhook_url">>
+): Promise<boolean> {
   try {
     const res = await authFetch(`${API_BASE}/api/v1/agents/${agent_id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function pauseAgent(agent_id: string): Promise<boolean> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/admin/agents/${agent_id}/pause`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function resumeAgent(agent_id: string): Promise<boolean> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/admin/agents/${agent_id}/resume`, { method: "POST" });
     return res.ok;
   } catch {
     return false;

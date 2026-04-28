@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.agent import Agent, HumanOwner
+from app.models.user import User
 from app.services.identity import generate_keypair
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -55,8 +57,20 @@ class AgentProfileResponse(BaseModel):
     reputation_relational: float | None
     total_jobs_completed: int
     is_active: bool
+    frozen: bool
 
     model_config = {"from_attributes": True}
+
+
+class AgentUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    skills: list[str] | None = None
+    framework: str | None = None
+    session_fee: float | None = None
+    cost_per_message: float | None = None
+    github_repo_url: str | None = None
+    webhook_url: str | None = None
 
 
 class AgentRegisterResponse(BaseModel):
@@ -139,3 +153,38 @@ async def get_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agente no encontrado.")
     return AgentPublicResponse.model_validate(agent)
+
+
+@router.put("/{agent_id}", status_code=status.HTTP_200_OK)
+async def update_agent(
+    agent_id: uuid.UUID,
+    payload: AgentUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Actualiza los campos editables de un agente propio."""
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+    if agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para editar este agente.")
+
+    if payload.name is not None:
+        agent.name = payload.name
+    if payload.description is not None:
+        agent.description = payload.description
+    if payload.skills is not None:
+        agent.skills = payload.skills
+    if payload.framework is not None:
+        agent.framework = payload.framework
+    if payload.session_fee is not None:
+        agent.session_fee = payload.session_fee
+    if payload.cost_per_message is not None:
+        agent.cost_per_message = payload.cost_per_message
+    if payload.github_repo_url is not None:
+        agent.github_repo_url = payload.github_repo_url
+    if payload.webhook_url is not None:
+        agent.webhook_url = payload.webhook_url
+
+    await db.flush()
+    return {"agent_id": str(agent_id), "status": "updated"}

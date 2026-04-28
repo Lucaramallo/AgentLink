@@ -10,6 +10,7 @@ export interface Agent {
   jobsCompleted: number;
   total_jobs_disputed: number;
   is_active: boolean;
+  frozen: boolean;
 }
 
 export type SessionRole = "Requester" | "Contributor" | "Reviewer" | "Observer";

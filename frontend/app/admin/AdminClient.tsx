@@ -9,6 +9,9 @@ import {
   fetchMyAgents,
   fetchMySessions,
   fetchRankings,
+  updateAgent,
+  pauseAgent,
+  resumeAgent,
   type AdminAgent,
   type AdminSession,
   type MyStats,
@@ -16,12 +19,12 @@ import {
 } from "../lib/api";
 
 type Tab = "dashboard" | "agents" | "ranking" | "sessions";
-type SortKey = "total_jobs_completed" | "reputation_technical" | "reputation_relational" | "alc_earned";
+type SortKey = "name" | "status" | "reputation_technical" | "reputation_relational" | "session_fee" | "cost_per_message" | "total_jobs_completed" | "total_jobs_disputed";
 type SortOrder = "desc" | "asc";
 
 function agentStatus(a: AdminAgent): { label: string; color: string } {
-  if (a.frozen) return { label: "Frozen", color: "#F59E0B" };
-  if (!a.is_active) return { label: "Paused", color: "#64748B" };
+  if (a.frozen) return { label: "Frozen", color: "#EF4444" };
+  if (!a.is_active) return { label: "Paused", color: "#F59E0B" };
   return { label: "Active", color: "#4ECDC4" };
 }
 
@@ -32,6 +35,27 @@ function fmtDate(iso: string) {
 function StarRating({ value }: { value: number | null }) {
   if (value === null) return <span style={{ color: "#64748B" }}>—</span>;
   return <span style={{ color: "#F59E0B", fontWeight: 600 }}>★ {value.toFixed(1)}</span>;
+}
+
+function SortableHeader({ col, label, currentSort, currentOrder, onSort }: {
+  col: SortKey; label: string; currentSort: SortKey; currentOrder: SortOrder; onSort: (col: SortKey) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const active = currentSort === col;
+  return (
+    <th
+      onClick={() => onSort(col)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        textAlign: "left", padding: "10px 12px", fontWeight: 500,
+        color: active ? "#4ECDC4" : hovered ? "#94A3B8" : "#64748B",
+        cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+      }}
+    >
+      {label}{active ? (currentOrder === "desc" ? " ▼" : " ▲") : ""}
+    </th>
+  );
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
@@ -47,8 +71,19 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
   );
 }
 
+type EditForm = {
+  name: string;
+  description: string;
+  skills: string;
+  framework: string;
+  session_fee: string;
+  cost_per_message: string;
+  github_repo_url: string;
+  webhook_url: string;
+};
+
 export default function AdminClient() {
-  const { user, isAuthenticated, loading: authLoading, logout } = useAuth();
+  const { user, isSuperAdmin, isAuthenticated, loading: authLoading, logout } = useAuth();
   const router = useRouter();
 
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -61,7 +96,23 @@ export default function AdminClient() {
   const [agentSearch, setAgentSearch] = useState("");
   const [agentSort, setAgentSort] = useState<SortKey>("total_jobs_completed");
   const [agentSortOrder, setAgentSortOrder] = useState<SortOrder>("desc");
+
+  function handleHeaderSort(col: SortKey) {
+    if (agentSort === col) {
+      setAgentSortOrder(o => o === "desc" ? "asc" : "desc");
+    } else {
+      setAgentSort(col);
+      setAgentSortOrder("desc");
+    }
+  }
   const [rankSort, setRankSort] = useState<"peer" | "human">("peer");
+
+  const [editingAgent, setEditingAgent] = useState<AdminAgent | null>(null);
+  const [editForm, setEditForm] = useState<EditForm>({
+    name: "", description: "", skills: "", framework: "claude",
+    session_fee: "", cost_per_message: "", github_repo_url: "", webhook_url: "",
+  });
+  const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
     if (authLoading) return;
@@ -88,17 +139,32 @@ export default function AdminClient() {
     fetchRankings(rankSort).then(setRankings);
   }, [rankSort, isAuthenticated]);
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
-  }, [agentSort, agentSortOrder, isAuthenticated]);
-
   const filteredAgents = useMemo(() => {
     const q = agentSearch.toLowerCase();
-    return agents.filter(a =>
+    const list = agents.filter(a =>
       !q || a.name.toLowerCase().includes(q) || a.framework.toLowerCase().includes(q)
     );
-  }, [agents, agentSearch]);
+    return [...list].sort((a, b) => {
+      if (agentSort === "name") {
+        const cmp = a.name.localeCompare(b.name);
+        return agentSortOrder === "asc" ? cmp : -cmp;
+      }
+      let av = 0, bv = 0;
+      switch (agentSort) {
+        case "status": {
+          const order = (x: AdminAgent) => x.frozen ? 2 : !x.is_active ? 1 : 0;
+          av = order(a); bv = order(b); break;
+        }
+        case "reputation_technical": av = a.reputation_technical ?? -1; bv = b.reputation_technical ?? -1; break;
+        case "reputation_relational": av = a.reputation_relational ?? -1; bv = b.reputation_relational ?? -1; break;
+        case "session_fee": av = a.session_fee ?? -1; bv = b.session_fee ?? -1; break;
+        case "cost_per_message": av = a.cost_per_message ?? -1; bv = b.cost_per_message ?? -1; break;
+        case "total_jobs_completed": av = a.total_jobs_completed; bv = b.total_jobs_completed; break;
+        case "total_jobs_disputed": av = a.total_jobs_disputed; bv = b.total_jobs_disputed; break;
+      }
+      return agentSortOrder === "asc" ? av - bv : bv - av;
+    });
+  }, [agents, agentSearch, agentSort, agentSortOrder]);
 
   const SIDEBAR: { id: Tab; label: string; icon: string }[] = [
     { id: "dashboard", label: "Dashboard", icon: "⬛" },
@@ -106,6 +172,49 @@ export default function AdminClient() {
     { id: "ranking", label: "Global Ranking", icon: "🏆" },
     { id: "sessions", label: "Session History", icon: "📋" },
   ];
+
+  function openEdit(a: AdminAgent) {
+    setEditingAgent(a);
+    setEditForm({
+      name: a.name,
+      description: a.description,
+      skills: a.skills.join(", "),
+      framework: a.framework,
+      session_fee: a.session_fee != null ? String(a.session_fee) : "",
+      cost_per_message: a.cost_per_message != null ? String(a.cost_per_message) : "",
+      github_repo_url: a.github_repo_url ?? "",
+      webhook_url: a.webhook_url ?? "",
+    });
+  }
+
+  async function saveEdit() {
+    if (!editingAgent) return;
+    setEditSaving(true);
+    const ok = await updateAgent(editingAgent.agent_id, {
+      name: editForm.name,
+      description: editForm.description,
+      skills: editForm.skills.split(",").map(s => s.trim()).filter(Boolean),
+      framework: editForm.framework,
+      session_fee: editForm.session_fee !== "" ? parseFloat(editForm.session_fee) : null,
+      cost_per_message: editForm.cost_per_message !== "" ? parseFloat(editForm.cost_per_message) : null,
+      github_repo_url: editForm.github_repo_url || null,
+      webhook_url: editForm.webhook_url || null,
+    });
+    setEditSaving(false);
+    if (ok) {
+      setEditingAgent(null);
+      fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
+    }
+  }
+
+  async function togglePause(a: AdminAgent) {
+    if (a.is_active) {
+      await pauseAgent(a.agent_id);
+    } else {
+      await resumeAgent(a.agent_id);
+    }
+    fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
+  }
 
   if (authLoading || loading) {
     return (
@@ -156,9 +265,11 @@ export default function AdminClient() {
               <div style={{ color: "#64748B", fontSize: 11 }}>{user.email}</div>
             </div>
           )}
-          <Link href="/superadmin" style={{ color: "#64748B", fontSize: 12, textDecoration: "none" }}>
-            SuperAdmin →
-          </Link>
+          {isSuperAdmin && (
+            <Link href="/superadmin" style={{ color: "#64748B", fontSize: 12, textDecoration: "none" }}>
+              SuperAdmin →
+            </Link>
+          )}
           <button
             onClick={logout}
             style={{ background: "none", border: "none", color: "#EF4444", fontSize: 12, cursor: "pointer", textAlign: "left", padding: 0 }}
@@ -167,6 +278,93 @@ export default function AdminClient() {
           </button>
         </div>
       </aside>
+
+      {/* Edit modal */}
+      {editingAgent && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{
+            background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 14,
+            padding: "32px", width: 520, maxHeight: "90vh", overflowY: "auto",
+          }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: "#E2E8F0" }}>Edit Agent</h2>
+
+            {(["name", "description", "skills", "github_repo_url", "webhook_url"] as const).map(field => (
+              <div key={field} style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>
+                  {field === "skills" ? "Skills (comma-separated)" :
+                   field === "github_repo_url" ? "GitHub Repo URL" :
+                   field === "webhook_url" ? "Webhook URL" :
+                   field.charAt(0).toUpperCase() + field.slice(1)}
+                </label>
+                <input
+                  value={editForm[field]}
+                  onChange={e => setEditForm(f => ({ ...f, [field]: e.target.value }))}
+                  style={{
+                    width: "100%", background: "#111827", border: "1px solid #1E2D4A",
+                    borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13,
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            ))}
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>Framework</label>
+              <select
+                value={editForm.framework}
+                onChange={e => setEditForm(f => ({ ...f, framework: e.target.value }))}
+                style={{
+                  width: "100%", background: "#111827", border: "1px solid #1E2D4A",
+                  borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13,
+                }}
+              >
+                {["claude", "langchain", "autogen", "custom"].map(fw => (
+                  <option key={fw} value={fw}>{fw}</option>
+                ))}
+              </select>
+            </div>
+
+            {(["session_fee", "cost_per_message"] as const).map(field => (
+              <div key={field} style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>
+                  {field === "session_fee" ? "Session Fee (ALC)" : "Cost per Message (ALC)"}
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editForm[field]}
+                  onChange={e => setEditForm(f => ({ ...f, [field]: e.target.value }))}
+                  style={{
+                    width: "100%", background: "#111827", border: "1px solid #1E2D4A",
+                    borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13,
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            ))}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 24, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setEditingAgent(null)}
+                style={{ background: "transparent", border: "1px solid #1E2D4A", color: "#94A3B8", padding: "8px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={editSaving}
+                style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: editSaving ? "not-allowed" : "pointer", opacity: editSaving ? 0.7 : 1 }}
+              >
+                {editSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <main style={{ flex: 1, padding: "32px 40px", overflowY: "auto" }}>
@@ -228,36 +426,21 @@ export default function AdminClient() {
                   borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 14,
                 }}
               />
-              <select
-                value={agentSort}
-                onChange={e => setAgentSort(e.target.value as SortKey)}
-                style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#94A3B8", fontSize: 13, cursor: "pointer" }}
-              >
-                <option value="total_jobs_completed">Sort: Jobs</option>
-                <option value="reputation_technical">Sort: Tech Rep</option>
-                <option value="reputation_relational">Sort: Rel Rep</option>
-                <option value="alc_earned">Sort: ALC Earned</option>
-              </select>
-              <button
-                onClick={() => setAgentSortOrder(o => o === "desc" ? "asc" : "desc")}
-                style={{
-                  background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8,
-                  padding: "8px 12px", color: "#94A3B8", fontSize: 13, cursor: "pointer",
-                  minWidth: 42, textAlign: "center",
-                }}
-                title={agentSortOrder === "desc" ? "Descending" : "Ascending"}
-              >
-                {agentSortOrder === "desc" ? "↓" : "↑"}
-              </button>
             </div>
 
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid #1E2D4A" }}>
-                    {["Agent Name", "Status", "Tech Rep", "Rel Rep", "Jobs", "Disputes", "Actions"].map(h => (
-                      <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: "#64748B", fontWeight: 500 }}>{h}</th>
-                    ))}
+                    <SortableHeader col="name" label="Agent Name" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="status" label="Status" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="reputation_technical" label="Tech Rep" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="reputation_relational" label="Rel Rep" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="session_fee" label="Session Fee" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="cost_per_message" label="Per Msg" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="total_jobs_completed" label="Jobs" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <SortableHeader col="total_jobs_disputed" label="Disputes" currentSort={agentSort} currentOrder={agentSortOrder} onSort={handleHeaderSort} />
+                    <th style={{ textAlign: "left", padding: "10px 12px", color: "#64748B", fontWeight: 500 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -274,13 +457,35 @@ export default function AdminClient() {
                         </td>
                         <td style={{ padding: "12px 12px" }}><StarRating value={a.reputation_technical} /></td>
                         <td style={{ padding: "12px 12px" }}><StarRating value={a.reputation_relational} /></td>
+                        <td style={{ padding: "12px 12px", color: "#94A3B8" }}>
+                          {a.session_fee != null ? <span>{a.session_fee} <span style={{ color: "#64748B", fontSize: 11 }}>ALC</span></span> : <span style={{ color: "#64748B" }}>—</span>}
+                        </td>
+                        <td style={{ padding: "12px 12px", color: "#94A3B8" }}>
+                          {a.cost_per_message != null ? <span>{a.cost_per_message} <span style={{ color: "#64748B", fontSize: 11 }}>ALC</span></span> : <span style={{ color: "#64748B" }}>—</span>}
+                        </td>
                         <td style={{ padding: "12px 12px", color: "#4ECDC4", fontWeight: 600 }}>{a.total_jobs_completed}</td>
                         <td style={{ padding: "12px 12px", color: a.total_jobs_disputed > 0 ? "#EF4444" : "#64748B" }}>{a.total_jobs_disputed}</td>
                         <td style={{ padding: "12px 12px" }}>
                           <div style={{ display: "flex", gap: 6 }}>
-                            <button style={{ background: "#1E2D4A", border: "none", color: "#94A3B8", padding: "4px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer" }}>
+                            <button
+                              onClick={() => openEdit(a)}
+                              style={{ background: "#1E2D4A", border: "none", color: "#94A3B8", padding: "4px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer" }}
+                            >
                               Edit
                             </button>
+                            {!a.frozen && (
+                              <button
+                                onClick={() => togglePause(a)}
+                                style={{
+                                  background: a.is_active ? "rgba(239,68,68,0.1)" : "rgba(78,205,196,0.1)",
+                                  border: "none",
+                                  color: a.is_active ? "#EF4444" : "#4ECDC4",
+                                  padding: "4px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer",
+                                }}
+                              >
+                                {a.is_active ? "Pause" : "Resume"}
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
