@@ -15,6 +15,7 @@ import {
   fetchGithubOAuthUrl,
   fetchGithubRepos,
   registerOwnedAgent,
+  regenerateAgentKey,
   type AdminAgent,
   type AdminSession,
   type MyStats,
@@ -128,6 +129,10 @@ export default function AdminClient() {
   const [registerSaving, setRegisterSaving] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerSuccess, setRegisterSuccess] = useState<string | null>(null);
+
+  const [regenConfirmAgent, setRegenConfirmAgent] = useState<AdminAgent | null>(null);
+  const [regenNewKey, setRegenNewKey] = useState<string | null>(null);
+  const [regenLoading, setRegenLoading] = useState(false);
 
   useEffect(() => {
     if (authLoading) return;
@@ -262,6 +267,15 @@ export default function AdminClient() {
     } finally {
       setRegisterSaving(false);
     }
+  }
+
+  async function confirmRegenKey() {
+    if (!regenConfirmAgent) return;
+    setRegenLoading(true);
+    const result = await regenerateAgentKey(regenConfirmAgent.agent_id);
+    setRegenLoading(false);
+    setRegenConfirmAgent(null);
+    if (result) setRegenNewKey(result.private_key_b64);
   }
 
   async function togglePause(a: AdminAgent) {
@@ -419,6 +433,63 @@ export default function AdminClient() {
                 style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: editSaving ? "not-allowed" : "pointer", opacity: editSaving ? 0.7 : 1 }}
               >
                 {editSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Regenerate Key — confirmation dialog */}
+      {regenConfirmAgent && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 14, padding: "32px", width: 440 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: "#E2E8F0" }}>Regenerate Key</h2>
+            <p style={{ fontSize: 13, color: "#94A3B8", marginBottom: 24, lineHeight: 1.6 }}>
+              This will invalidate the current private key for <strong style={{ color: "#E2E8F0" }}>{regenConfirmAgent.name}</strong>.
+              The agent will need to be updated with the new key. Continue?
+            </p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setRegenConfirmAgent(null)}
+                style={{ background: "transparent", border: "1px solid #1E2D4A", color: "#94A3B8", padding: "8px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRegenKey}
+                disabled={regenLoading}
+                style={{ background: "#EF4444", border: "none", color: "#fff", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: regenLoading ? "not-allowed" : "pointer", opacity: regenLoading ? 0.7 : 1 }}
+              >
+                {regenLoading ? "Regenerating…" : "Yes, Regenerate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Regenerate Key — new key display */}
+      {regenNewKey && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 14, padding: "32px", width: 480 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: "#E2E8F0" }}>New Private Key</h2>
+            <p style={{ fontSize: 12, color: "#F59E0B", marginBottom: 16 }}>
+              ⚠ Save this key now. It won't be shown again.
+            </p>
+            <div style={{ background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "12px 14px", fontSize: 12, color: "#4ECDC4", wordBreak: "break-all", fontFamily: "monospace", marginBottom: 16 }}>
+              {regenNewKey}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => { navigator.clipboard.writeText(regenNewKey); }}
+                style={{ background: "#1E2D4A", border: "none", color: "#94A3B8", padding: "8px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}
+              >
+                Copy
+              </button>
+              <button
+                onClick={() => setRegenNewKey(null)}
+                style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+              >
+                Done
               </button>
             </div>
           </div>
@@ -687,6 +758,12 @@ export default function AdminClient() {
                                 {a.is_active ? "Pause" : "Resume"}
                               </button>
                             )}
+                            <button
+                              onClick={() => setRegenConfirmAgent(a)}
+                              style={{ background: "rgba(245,158,11,0.1)", border: "none", color: "#F59E0B", padding: "4px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer" }}
+                            >
+                              🔑 Regen Key
+                            </button>
                           </div>
                         </td>
                       </tr>

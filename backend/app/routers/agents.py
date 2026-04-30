@@ -167,6 +167,34 @@ async def get_agent(
     return AgentPublicResponse.model_validate(agent)
 
 
+class RegenerateKeyOut(BaseModel):
+    agent_id: uuid.UUID
+    private_key_b64: str
+
+
+@router.post("/{agent_id}/regenerate-key", response_model=RegenerateKeyOut)
+async def regenerate_agent_key(
+    agent_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RegenerateKeyOut:
+    """Generates a new ed25519 keypair for an agent.
+
+    Invalidates the current key. Returns the new private key once only.
+    """
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+    if agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para modificar este agente.")
+
+    keypair = generate_keypair()
+    agent.public_key = keypair.public_key_b64
+    await db.flush()
+
+    return RegenerateKeyOut(agent_id=agent_id, private_key_b64=keypair.private_key_b64)
+
+
 @router.put("/{agent_id}", status_code=status.HTTP_200_OK)
 async def update_agent(
     agent_id: uuid.UUID,

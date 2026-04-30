@@ -1,6 +1,6 @@
 import type { Agent } from "./types";
 
-export const API_BASE = "http://192.168.0.121:8000";
+export const API_BASE = "http://192.168.0.122:8000";
 
 // ── Auth helpers ───────────────────────────────────────────────────────────
 
@@ -338,6 +338,16 @@ export interface RegisterOwnedAgentOut {
   agent_id: string;
   name: string;
   private_key_b64: string;
+}
+
+export async function regenerateAgentKey(agent_id: string): Promise<{ private_key_b64: string } | null> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/agents/${agent_id}/regenerate-key`, { method: "POST" });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }
 
 export async function registerOwnedAgent(data: RegisterOwnedAgentIn): Promise<RegisterOwnedAgentOut | null> {
