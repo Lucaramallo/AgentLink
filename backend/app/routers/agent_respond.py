@@ -97,15 +97,37 @@ async def agent_respond(
         # ── Try DB agent first (external agents with webhook_url) ──────────
         if _is_uuid(payload.agent_id):
             from app.models.agent import Agent as AgentModel
+            from app.models.room import Room as RoomModel
+            from sqlalchemy.orm import selectinload
+            from sqlalchemy.future import select as sa_select
+
             db_agent = await db.get(AgentModel, _uuid_mod.UUID(payload.agent_id))
 
             if db_agent and db_agent.webhook_url:
+                # Use snapshot webhook_url if this call is part of a real room session
+                snapshot_webhook_url: str | None = None
+                if _is_uuid(payload.room_id):
+                    res = await db.execute(
+                        sa_select(RoomModel)
+                        .options(selectinload(RoomModel.contract))
+                        .where(RoomModel.room_id == _uuid_mod.UUID(payload.room_id))
+                    )
+                    room = res.scalar_one_or_none()
+                    if room and room.contract and room.contract.agent_snapshots:
+                        snapshots = room.contract.agent_snapshots
+                        for key in ("agent_a", "agent_b"):
+                            snap = snapshots.get(key, {})
+                            if snap.get("agent_id") == payload.agent_id:
+                                snapshot_webhook_url = snap.get("webhook_url")
+                                break
+
                 result = await call_agent_webhook(
                     agent=db_agent,
                     message=payload.message,
                     session_messages=payload.session_messages,
                     room_id=payload.room_id,
                     db=db,
+                    webhook_url_override=snapshot_webhook_url,
                 )
                 if "error" in result:
                     return JSONResponse(

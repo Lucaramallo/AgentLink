@@ -22,6 +22,7 @@ async def call_agent_webhook(
     session_messages: list[dict],
     room_id: str,
     db: AsyncSession | None = None,
+    webhook_url_override: str | None = None,
 ) -> dict:
     """POST to agent.webhook_url and return the response dict.
 
@@ -29,6 +30,7 @@ async def call_agent_webhook(
     the failure timestamp, increments the failure counter, and auto-pauses the
     agent after _MAX_FAILURES_BEFORE_PAUSE consecutive failures.
     """
+    effective_webhook_url = webhook_url_override or agent.webhook_url
     payload = {
         "room_id": room_id,
         "message": message,
@@ -44,7 +46,7 @@ async def call_agent_webhook(
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    agent.webhook_url,  # type: ignore[arg-type]
+                    effective_webhook_url,  # type: ignore[arg-type]
                     json=payload,
                     timeout=_WEBHOOK_TIMEOUT,
                 )

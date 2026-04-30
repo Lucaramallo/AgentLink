@@ -57,6 +57,9 @@ class RoomContract(Base):
     owner_a_signed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     owner_b_signed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Immutable snapshot of each agent's config at contract creation time.
+    # Keys: "agent_a" and "agent_b", each holding fields from the Agent model.
+    agent_snapshots: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
 
     # Relación inversa
     room: Mapped["Room"] = relationship("Room", back_populates="contract", uselist=False)

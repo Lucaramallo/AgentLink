@@ -69,17 +69,42 @@ async def get_room(
     }
 
 
+def _agent_snapshot(agent: Agent) -> dict:
+    return {
+        "agent_id": str(agent.agent_id),
+        "name": agent.name,
+        "description": agent.description,
+        "skills": agent.skills,
+        "framework": agent.framework,
+        "session_fee": agent.session_fee,
+        "cost_per_message": agent.cost_per_message,
+        "webhook_url": agent.webhook_url,
+        "public_key": agent.public_key,
+    }
+
+
 @router.post("/contracts", status_code=status.HTTP_201_CREATED)
 async def create_contract(
     payload: ContractCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
     """Crea el borrador de contrato de sala. Ambos dueños deben firmarlo antes de abrir la sala."""
+    agent_a = await db.get(Agent, payload.agent_a_id)
+    if not agent_a:
+        raise HTTPException(status_code=404, detail="Agente A no encontrado.")
+    agent_b = await db.get(Agent, payload.agent_b_id)
+    if not agent_b:
+        raise HTTPException(status_code=404, detail="Agente B no encontrado.")
+
     contract = RoomContract(
         task_description=payload.task_description,
         deliverable_spec=payload.deliverable_spec,
         max_revision_rounds=payload.max_revision_rounds,
         timeout_hours=payload.timeout_hours,
+        agent_snapshots={
+            "agent_a": _agent_snapshot(agent_a),
+            "agent_b": _agent_snapshot(agent_b),
+        },
     )
     db.add(contract)
     await db.flush()
@@ -188,6 +213,27 @@ async def submit_verdict(
 
     room = await process_deliverable(db, room, payload.verdict, payload.reason)
     return {"room_id": str(room.room_id), "status": room.status, "outcome": room.outcome}
+
+
+@router.get("/{room_id}/contract-snapshot")
+async def get_contract_snapshot(
+    room_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Retorna el snapshot inmutable de los agentes tal como fueron al firmar el contrato."""
+    result = await db.execute(
+        select(Room).options(selectinload(Room.contract)).where(Room.room_id == room_id)
+    )
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala no encontrada.")
+    if not room.contract or not room.contract.agent_snapshots:
+        raise HTTPException(status_code=404, detail="Snapshot de contrato no disponible.")
+    return {
+        "contract_id": str(room.contract.contract_id),
+        "signed_at": room.contract.signed_at.isoformat() if room.contract.signed_at else None,
+        "agent_snapshots": room.contract.agent_snapshots,
+    }
 
 
 # --- WebSocket ---
