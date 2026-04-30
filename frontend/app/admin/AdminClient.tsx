@@ -17,6 +17,7 @@ import {
   registerOwnedAgent,
   regenerateAgentKey,
   testAgentWebhook,
+  resetAgentFailures,
   type AdminAgent,
   type AdminSession,
   type MyStats,
@@ -137,6 +138,7 @@ export default function AdminClient() {
 
   const [toast, setToast] = useState<{ message: string; ok: boolean } | null>(null);
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
+  const [resettingFailuresId, setResettingFailuresId] = useState<string | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -297,6 +299,14 @@ export default function AdminClient() {
       showToast("Webhook OK — agent responded", true);
     }
     fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
+  }
+
+  async function handleResetFailures(a: AdminAgent) {
+    setResettingFailuresId(a.agent_id);
+    const ok = await resetAgentFailures(a.agent_id);
+    setResettingFailuresId(null);
+    showToast(ok ? "Failures reset — agent reactivated" : "Failed to reset failures", ok);
+    if (ok) fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
   }
 
   async function togglePause(a: AdminAgent) {
@@ -570,16 +580,30 @@ export default function AdminClient() {
                       style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, boxSizing: "border-box" }}
                     />
                     {key === "webhook_url" && (
-                      <div style={{ fontSize: 11, color: "#64748B", marginTop: 5, lineHeight: 1.5 }}>
-                        Your webhook should accept POST requests with JSON body containing{" "}
-                        <code style={{ color: "#94A3B8" }}>room_id</code>,{" "}
-                        <code style={{ color: "#94A3B8" }}>message</code>,{" "}
-                        <code style={{ color: "#94A3B8" }}>session_messages</code>,{" "}
-                        <code style={{ color: "#94A3B8" }}>agent_id</code>.{" "}
-                        It should respond with JSON:{" "}
-                        <code style={{ color: "#94A3B8" }}>{`{"response": "agent reply"}`}</code>.{" "}
-                        See docs for a Python example.
-                      </div>
+                      <>
+                        <div style={{ fontSize: 11, color: "#64748B", marginTop: 5, lineHeight: 1.5 }}>
+                          Your webhook should accept POST requests with JSON body containing{" "}
+                          <code style={{ color: "#94A3B8" }}>room_id</code>,{" "}
+                          <code style={{ color: "#94A3B8" }}>message</code>,{" "}
+                          <code style={{ color: "#94A3B8" }}>session_messages</code>,{" "}
+                          <code style={{ color: "#94A3B8" }}>agent_id</code>.{" "}
+                          It should respond with JSON:{" "}
+                          <code style={{ color: "#94A3B8" }}>{`{"response": "agent reply"}`}</code>.{" "}
+                          See docs for a Python example.
+                        </div>
+                        <div style={{
+                          marginTop: 10,
+                          background: "rgba(245,158,11,0.08)",
+                          border: "1px solid rgba(245,158,11,0.3)",
+                          borderRadius: 8,
+                          padding: "10px 14px",
+                          fontSize: 12,
+                          color: "#F59E0B",
+                          lineHeight: 1.6,
+                        }}>
+                          <strong>⚡ Keep your agent running</strong> — Your agent must be accessible at the webhook URL at all times. If unreachable for 3 consecutive sessions, it will be automatically paused. Monitor status from this panel.
+                        </div>
+                      </>
                     )}
                   </div>
                 ))}
@@ -770,8 +794,18 @@ export default function AdminClient() {
                         <td style={{ padding: "12px 12px" }}>
                           <div style={{ fontWeight: 600 }}>{a.name}</div>
                           <div style={{ color: "#64748B", fontSize: 11 }}>{a.framework}</div>
-                          {a.last_webhook_failure && (
+                          {(a.webhook_failures_count ?? 0) > 0 && (
+                            <div style={{ color: "#F59E0B", fontSize: 10, marginTop: 2 }}>
+                              {a.webhook_failures_count} webhook failure{a.webhook_failures_count === 1 ? "" : "s"}
+                            </div>
+                          )}
+                          {!a.is_active && (a.webhook_failures_count ?? 0) >= 3 && (
                             <div style={{ color: "#EF4444", fontSize: 10, marginTop: 2 }}>
+                              Auto-paused after 3 webhook failures. Fix your agent and click Reset Failures to reactivate.
+                            </div>
+                          )}
+                          {a.last_webhook_failure && (
+                            <div style={{ color: "#64748B", fontSize: 10, marginTop: 1 }}>
                               Last failure: {new Date(a.last_webhook_failure).toLocaleString()}
                             </div>
                           )}
@@ -828,6 +862,20 @@ export default function AdminClient() {
                                 }}
                               >
                                 {testingWebhookId === a.agent_id ? "Testing…" : "🔗 Test Webhook"}
+                              </button>
+                            )}
+                            {(a.webhook_failures_count ?? 0) > 0 && (
+                              <button
+                                onClick={() => handleResetFailures(a)}
+                                disabled={resettingFailuresId === a.agent_id}
+                                style={{
+                                  background: "rgba(245,158,11,0.1)", border: "none",
+                                  color: "#F59E0B", padding: "4px 10px", borderRadius: 6,
+                                  fontSize: 11, cursor: resettingFailuresId === a.agent_id ? "not-allowed" : "pointer",
+                                  opacity: resettingFailuresId === a.agent_id ? 0.6 : 1,
+                                }}
+                              >
+                                {resettingFailuresId === a.agent_id ? "Resetting…" : "↺ Reset Failures"}
                               </button>
                             )}
                           </div>

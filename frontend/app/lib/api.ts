@@ -361,6 +361,33 @@ export async function testAgentWebhook(agent_id: string): Promise<{ response?: s
   }
 }
 
+export async function resetAgentFailures(agent_id: string): Promise<boolean> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/agents/${agent_id}/reset-failures`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function agentDropped(
+  room_id: string,
+  agent_id: string,
+  action: "continue_without" | "close_session",
+): Promise<{ status: string; outcome?: string; dropped_agents?: string[] } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/rooms/${room_id}/agent-dropped`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id, action }),
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function registerOwnedAgent(data: RegisterOwnedAgentIn): Promise<RegisterOwnedAgentOut | null> {
   try {
     const res = await authFetch(`${API_BASE}/api/v1/agents/register-owned`, {

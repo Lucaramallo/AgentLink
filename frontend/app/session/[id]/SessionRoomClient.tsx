@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { SessionRole } from "../../lib/types";
 import { useCredits } from "../../lib/credits";
+import { agentDropped } from "../../lib/api";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -324,8 +325,13 @@ export default function SessionRoomClient() {
   const [hasDeliverable, setHasDeliverable]   = useState(false);
   const [deliverableMsg, setDeliverableMsg]   = useState<Message | null>(null);
   const [showModal, setShowModal]             = useState(false);
-  const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | null>(null);
+  const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | "INCOMPLETE" | null>(null);
   const [verdictLoading, setVerdictLoading] = useState(false);
+
+  // Agent failure handling
+  const [showFailureModal, setShowFailureModal] = useState(false);
+  const [failedAgent, setFailedAgent]           = useState<{ id: string; name: string } | null>(null);
+  const [droppedAgentIds, setDroppedAgentIds]   = useState<Set<string>>(new Set());
 
   // Rating flow (shown before CloseModal after CONFORME)
   const [showRatingScreen, setShowRatingScreen]   = useState(false);
@@ -798,6 +804,10 @@ export default function SessionRoomClient() {
     return name.toLowerCase();
   }
 
+  function isUUID(s: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  }
+
   async function callDemoAgents(humanText: string, sessionMessages: Message[]) {
     const agents = graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer");
     if (agents.length === 0) return;
@@ -881,14 +891,20 @@ export default function SessionRoomClient() {
       context: Message[],
       type: MessageType,
     ): Promise<Message | null> {
+      // Skip agents already dropped from this session
+      if (droppedAgentIds.has(agent.id)) return null;
+
       try {
+        // Send UUID if the node id is a real agent UUID, otherwise use the demo slug
+        const agentIdToSend = isUUID(agent.id) ? agent.id : toDemoSlug(agent.label);
+
         const res = await fetch(`${API}/agents/respond`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             room_id: roomId,
             message: prompt,
-            agent_id: toDemoSlug(agent.label),
+            agent_id: agentIdToSend,
             session_messages: context,
           }),
         });
@@ -898,9 +914,18 @@ export default function SessionRoomClient() {
           if (body.error === "demo_limit_reached") setDemoLimitReached(true);
           return null;
         }
+
+        const data = await res.json().catch(() => ({}));
+
+        // Agent webhook failure — show recovery modal
+        if (data.error === "agent_unavailable") {
+          setFailedAgent({ id: agent.id, name: data.agent_name ?? agent.label });
+          setShowFailureModal(true);
+          return null;
+        }
+
         if (!res.ok) return null;
 
-        const data = await res.json();
         if (data.messages_remaining != null) setMessagesRemaining(data.messages_remaining);
 
         const content: string = data.response ?? data.message ?? data.content ?? "";
@@ -982,7 +1007,7 @@ export default function SessionRoomClient() {
 
   async function sendMessage() {
     const text = inputText.trim();
-    if (!text || sending) return;
+    if (!text || sending || showFailureModal) return;
     setSending(true);
 
     const msg: Message = {
@@ -1022,6 +1047,32 @@ export default function SessionRoomClient() {
     // Trigger demo agent responses for each non-human Contributor
     await callDemoAgents(text, updatedMessages);
     setSending(false);
+  }
+
+  // ── Agent failure handlers ────────────────────────────────────────────────
+
+  async function handleContinueWithout() {
+    if (!failedAgent) return;
+    await agentDropped(roomId, failedAgent.id, "continue_without");
+    setDroppedAgentIds((prev) => new Set([...prev, failedAgent.id]));
+    setGraphNodes((prev) => prev.filter((n) => n.id !== failedAgent.id));
+    setMessages((prev) => [
+      ...prev,
+      systemMsg(`Agent ${failedAgent.name} has been removed from this session.`),
+    ]);
+    setShowFailureModal(false);
+    setFailedAgent(null);
+  }
+
+  async function handleCloseSessionDueToFailure() {
+    if (!failedAgent) return;
+    await agentDropped(roomId, failedAgent.id, "close_session");
+    add(sessionCost ?? 0); // full escrow refund
+    setShowFailureModal(false);
+    setFailedAgent(null);
+    setStatus("CLOSED_DISPUTED");
+    setOutcome("INCOMPLETE");
+    setShowModal(true);
   }
 
   // ── Escrow settlement ────────────────────────────────────────────────────
@@ -1541,6 +1592,15 @@ export default function SessionRoomClient() {
         </div>
       </div>
 
+      {/* Agent failure modal */}
+      {showFailureModal && failedAgent && (
+        <AgentFailureModal
+          agentName={failedAgent.name}
+          onContinueWithout={handleContinueWithout}
+          onCloseSession={handleCloseSessionDueToFailure}
+        />
+      )}
+
       {/* Rating screen — peer reviews + human rating before close modal */}
       {showRatingScreen && (
         <RatingModal
@@ -1964,6 +2024,66 @@ function RatingModal({
   );
 }
 
+function AgentFailureModal({
+  agentName,
+  onContinueWithout,
+  onCloseSession,
+}: {
+  agentName: string;
+  onContinueWithout: () => void;
+  onCloseSession: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
+      <div
+        className="bg-al-surface border border-al-border rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6"
+        style={{ boxShadow: "0 0 60px rgba(239,68,68,0.1)" }}
+      >
+        <div className="flex flex-col items-center mb-5">
+          <div
+            className="w-14 h-14 rounded-full flex items-center justify-center mb-3"
+            style={{ background: "rgba(245,158,11,0.12)", border: "2px solid rgba(245,158,11,0.35)" }}
+          >
+            <span className="text-2xl leading-none">⚠️</span>
+          </div>
+          <h2 className="text-lg font-bold text-al-text text-center">
+            Agent {agentName} is not responding
+          </h2>
+          <p className="text-sm text-al-muted mt-2 text-center leading-relaxed">
+            The agent failed to respond after 3 attempts. Its owner has been notified.
+            How would you like to proceed?
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={onContinueWithout}
+            className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all"
+            style={{
+              background: "rgba(78,205,196,0.12)",
+              border: "1px solid rgba(78,205,196,0.4)",
+              color: "#4ECDC4",
+            }}
+          >
+            Continue without {agentName}
+          </button>
+          <button
+            onClick={onCloseSession}
+            className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all"
+            style={{
+              background: "rgba(239,68,68,0.10)",
+              border: "1px solid rgba(239,68,68,0.35)",
+              color: "#EF4444",
+            }}
+          >
+            Close session — full refund
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CloseModal({
   outcome,
   roomId,
@@ -1982,7 +2102,7 @@ function CloseModal({
   onDownload,
   onClose,
 }: {
-  outcome: "SUCCESS" | "DISPUTED";
+  outcome: "SUCCESS" | "DISPUTED" | "INCOMPLETE";
   roomId: string;
   agents: GraphNode[];
   messages: Message[];
@@ -1999,8 +2119,9 @@ function CloseModal({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const isSuccess = outcome === "SUCCESS";
-  const color     = isSuccess ? "#22C55E" : "#F59E0B";
+  const isSuccess    = outcome === "SUCCESS";
+  const isIncomplete = outcome === "INCOMPLETE";
+  const color        = isSuccess ? "#22C55E" : isIncomplete ? "#EF4444" : "#F59E0B";
 
   // Per-agent cost breakdown
   const agentBreakdown = agents.map((a) => {
@@ -2038,6 +2159,11 @@ function CloseModal({
               <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke={color}>
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
+            ) : isIncomplete ? (
+              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke={color}>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M18.364 5.636a9 9 0 11-12.728 0M12 3v9" />
+              </svg>
             ) : (
               <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke={color}>
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -2046,17 +2172,19 @@ function CloseModal({
             )}
           </div>
           <h2 className="text-xl font-bold text-al-text">
-            Session {isSuccess ? "Completed" : "Disputed"}
+            {isSuccess ? "Session Completed" : isIncomplete ? "Session Closed" : "Session Disputed"}
           </h2>
           <p className="text-sm text-al-muted mt-1 text-center">
             {isSuccess
               ? "All parties satisfied. Escrow released to contributors."
+              : isIncomplete
+              ? "Session closed due to agent failure. Full escrow returned to you."
               : "Dispute logged on-chain. Escalated to AgentLink arbitration."}
           </p>
         </div>
 
         {/* Reputation updates — real per-agent deltas when available */}
-        {agents.length > 0 && (
+        {agents.length > 0 && !isIncomplete && (
           <div className="bg-al-bg rounded-xl border border-al-border p-4 mb-4">
             <p className="text-[10px] text-al-muted uppercase tracking-wider mb-3">Reputation Updates</p>
             <div className="space-y-3">
@@ -2090,8 +2218,8 @@ function CloseModal({
           </div>
         )}
 
-        {/* Cost breakdown per agent */}
-        {agents.length > 0 && (
+        {/* Cost breakdown per agent — not shown for INCOMPLETE (no payments made) */}
+        {agents.length > 0 && !isIncomplete && (
           <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 mb-4 overflow-hidden">
             <div className="px-4 py-2 border-b border-amber-400/15">
               <p className="text-[10px] text-amber-400 uppercase tracking-wider font-bold">Cost Breakdown</p>

@@ -10,8 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.models.user import UserRole
 from app.services.agent_engine import AGENTS, get_agent_response, get_peer_review
 from app.services.webhook_caller import call_agent_webhook
+
+_WHITELISTED_EMAILS: frozenset[str] = frozenset({"owner@agentlink.ai", "admin@agentlink.ai"})
+
+
+def _is_whitelisted_user(user: object | None) -> bool:
+    if user is None:
+        return False
+    if getattr(user, "email", "") in _WHITELISTED_EMAILS:
+        return True
+    return getattr(user, "role", None) == UserRole.SUPERADMIN
 
 router = APIRouter(prefix="/agents", tags=["agent_respond"])
 
@@ -132,7 +143,12 @@ async def agent_respond(
                 if "error" in result:
                     return JSONResponse(
                         status_code=503,
-                        content=result,
+                        content={
+                            "error": "agent_unavailable",
+                            "agent_id": str(db_agent.agent_id),
+                            "agent_name": db_agent.name,
+                            "message": f"Agent {db_agent.name} is not responding. Owner has been notified.",
+                        },
                     )
                 return DemoResponse(
                     response=result["response"],
@@ -140,6 +156,21 @@ async def agent_respond(
                     agent_name=db_agent.name,
                     messages_remaining=-1,  # external agents have no demo limit
                 )
+
+            if db_agent and not db_agent.webhook_url:
+                # Only whitelisted owners may use the built-in agent_engine
+                from app.models.user import User as UserModel
+                owner_user = None
+                if db_agent.user_id:
+                    owner_user = await db.get(UserModel, db_agent.user_id)
+                if not _is_whitelisted_user(owner_user):
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": "no_webhook",
+                            "message": "External agents must have a webhook URL configured",
+                        },
+                    )
 
         # ── Fall through to built-in demo agents ───────────────────────────
         agent_id = _normalize_agent_id(payload.agent_id)

@@ -1,6 +1,7 @@
 """Router de Salas — creación, mensajes y cierre de salas de colaboración — Módulos 2 y 3."""
 
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -8,10 +9,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models.agent import Agent
-from app.models.room import Message, MessageType, Room, RoomContract
+from app.models.room import Message, MessageType, Room, RoomContract, RoomOutcome, RoomStatus
 from app.services.identity import sign_message, verify_signature
 from app.services.room_manager import create_room, process_deliverable
 from app.websocket.room_handler import room_manager
@@ -234,6 +236,57 @@ async def get_contract_snapshot(
         "signed_at": room.contract.signed_at.isoformat() if room.contract.signed_at else None,
         "agent_snapshots": room.contract.agent_snapshots,
     }
+
+
+# --- Agent dropped ---
+
+class AgentDroppedPayload(BaseModel):
+    agent_id: str
+    action: str  # "continue_without" | "close_session"
+
+
+@router.post("/{room_id}/agent-dropped")
+async def agent_dropped(
+    room_id: uuid.UUID,
+    payload: AgentDroppedPayload,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Called when a Requester decides how to proceed after an agent fails mid-session.
+
+    continue_without: marks the agent as dropped (stored in room.dropped_agents).
+    close_session: closes the room as INCOMPLETE and returns full escrow to Requester.
+    """
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala no encontrada.")
+
+    if payload.action == "continue_without":
+        current = list(room.dropped_agents or [])
+        if payload.agent_id not in current:
+            current.append(payload.agent_id)
+            room.dropped_agents = current
+            flag_modified(room, "dropped_agents")
+        await db.flush()
+        return {"status": "agent_dropped", "dropped_agents": room.dropped_agents}
+
+    elif payload.action == "close_session":
+        room.status = RoomStatus.CLOSED
+        room.outcome = RoomOutcome.INCOMPLETE
+        room.closed_at = datetime.now(timezone.utc)
+        # Also mark the agent as dropped for audit trail
+        current = list(room.dropped_agents or [])
+        if payload.agent_id not in current:
+            current.append(payload.agent_id)
+            room.dropped_agents = current
+            flag_modified(room, "dropped_agents")
+        await db.flush()
+        return {
+            "status": "closed",
+            "outcome": "INCOMPLETE",
+            "refund": "full",
+        }
+
+    raise HTTPException(status_code=400, detail="action must be 'continue_without' or 'close_session'.")
 
 
 # --- WebSocket ---

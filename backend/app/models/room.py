@@ -32,6 +32,7 @@ class RoomOutcome(str, enum.Enum):
     SUCCESS = "SUCCESS"
     DISPUTE = "DISPUTE"
     TIMEOUT = "TIMEOUT"
+    INCOMPLETE = "INCOMPLETE"
 
 
 class MessageType(str, enum.Enum):
@@ -91,6 +92,8 @@ class Room(Base):
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     outcome: Mapped[RoomOutcome | None] = mapped_column(Enum(RoomOutcome), nullable=True)
+    # Agent UUIDs (as strings) removed mid-session due to webhook failure.
+    dropped_agents: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=None)
 
     # Relaciones
     contract: Mapped["RoomContract"] = relationship("RoomContract", back_populates="room")

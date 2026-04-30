@@ -14,9 +14,17 @@ from app.config import settings
 from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.agent import Agent, HumanOwner
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.identity import generate_keypair
 from app.services.webhook_caller import call_agent_webhook
+
+_WHITELISTED_EMAILS: frozenset[str] = frozenset({"owner@agentlink.ai", "admin@agentlink.ai"})
+
+
+def _is_user_whitelisted(user: User) -> bool:
+    if user.email in _WHITELISTED_EMAILS:
+        return True
+    return user.role == UserRole.SUPERADMIN
 
 _fernet = Fernet(settings.github_token_encryption_key.encode())
 
@@ -271,6 +279,15 @@ async def register_owned_agent(
     Requires GitHub to be connected. Verifies github_repo_url belongs to the user.
     Returns the new agent including the private key (shown once only).
     """
+    whitelisted = _is_user_whitelisted(current_user)
+
+    # Non-whitelisted users must supply a webhook_url
+    if not whitelisted and not payload.webhook_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Webhook URL is required. External agents must have a reachable webhook URL configured.",
+        )
+
     if not current_user.github_access_token:
         raise HTTPException(
             status_code=400,
@@ -306,6 +323,28 @@ async def register_owned_agent(
             status_code=403,
             detail=f"El repositorio no te pertenece. Owner: {repo_owner}",
         )
+
+    # Test webhook reachability before creating the agent (non-whitelisted only)
+    if payload.webhook_url and not whitelisted:
+        test_body = {
+            "room_id": "test",
+            "message": "AgentLink webhook test. Please respond.",
+            "session_messages": [],
+            "agent_id": "test",
+            "agent_name": payload.name,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(payload.webhook_url, json=test_body, timeout=15.0)
+                resp.raise_for_status()
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Your webhook must be reachable to register your agent. "
+                    "Please ensure it's running and try again."
+                ),
+            )
 
     # Find or create HumanOwner for this user
     result = await db.execute(select(HumanOwner).where(HumanOwner.email == current_user.email))
@@ -377,3 +416,30 @@ async def test_agent_webhook(
         db=db,
     )
     return result
+
+
+# ── Reset webhook failures ─────────────────────────────────────────────────
+
+@router.post("/{agent_id}/reset-failures", status_code=status.HTTP_200_OK)
+async def reset_webhook_failures(
+    agent_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Resets webhook_failures_count to 0 and re-activates the agent if auto-paused.
+
+    Only the agent's owner can call this. Use after fixing the webhook endpoint.
+    """
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+    if agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para modificar este agente.")
+
+    agent.webhook_failures_count = 0
+    agent.last_webhook_failure = None
+    # Un-pause only if the agent was not frozen
+    if not agent.frozen:
+        agent.is_active = True
+    await db.flush()
+    return {"agent_id": str(agent_id), "status": "reset", "is_active": agent.is_active}
