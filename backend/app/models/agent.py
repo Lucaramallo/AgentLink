@@ -64,6 +64,10 @@ class Agent(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
+    # Webhook health tracking
+    last_webhook_failure: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    webhook_failures_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+
     # FK al nuevo sistema de usuarios (nullable para compatibilidad con agentes demo)
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True

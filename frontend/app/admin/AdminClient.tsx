@@ -16,6 +16,7 @@ import {
   fetchGithubRepos,
   registerOwnedAgent,
   regenerateAgentKey,
+  testAgentWebhook,
   type AdminAgent,
   type AdminSession,
   type MyStats,
@@ -133,6 +134,9 @@ export default function AdminClient() {
   const [regenConfirmAgent, setRegenConfirmAgent] = useState<AdminAgent | null>(null);
   const [regenNewKey, setRegenNewKey] = useState<string | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
+
+  const [toast, setToast] = useState<{ message: string; ok: boolean } | null>(null);
+  const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -278,6 +282,23 @@ export default function AdminClient() {
     if (result) setRegenNewKey(result.private_key_b64);
   }
 
+  function showToast(message: string, ok: boolean) {
+    setToast({ message, ok });
+    setTimeout(() => setToast(null), 4000);
+  }
+
+  async function handleTestWebhook(a: AdminAgent) {
+    setTestingWebhookId(a.agent_id);
+    const result = await testAgentWebhook(a.agent_id);
+    setTestingWebhookId(null);
+    if (result.error) {
+      showToast(`Webhook failed — ${result.message ?? result.error}`, false);
+    } else {
+      showToast("Webhook OK — agent responded", true);
+    }
+    fetchMyAgents(agentSort, agentSortOrder).then(setAgents);
+  }
+
   async function togglePause(a: AdminAgent) {
     if (a.is_active) {
       await pauseAgent(a.agent_id);
@@ -299,6 +320,20 @@ export default function AdminClient() {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "#070B14", color: "#E2E8F0", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 999,
+          background: toast.ok ? "rgba(78,205,196,0.15)" : "rgba(239,68,68,0.15)",
+          border: `1px solid ${toast.ok ? "#4ECDC4" : "#EF4444"}`,
+          color: toast.ok ? "#4ECDC4" : "#EF4444",
+          borderRadius: 10, padding: "12px 20px", fontSize: 13, fontWeight: 500,
+          maxWidth: 360, boxShadow: "0 4px 24px rgba(0,0,0,0.4)",
+        }}>
+          {toast.message}
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside style={{
         width: 220, background: "#0D1421", borderRight: "1px solid #1E2D4A",
@@ -534,6 +569,18 @@ export default function AdminClient() {
                       onChange={e => setRegisterForm(f => ({ ...f, [key]: e.target.value }))}
                       style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, boxSizing: "border-box" }}
                     />
+                    {key === "webhook_url" && (
+                      <div style={{ fontSize: 11, color: "#64748B", marginTop: 5, lineHeight: 1.5 }}>
+                        Your webhook should accept POST requests with JSON body containing{" "}
+                        <code style={{ color: "#94A3B8" }}>room_id</code>,{" "}
+                        <code style={{ color: "#94A3B8" }}>message</code>,{" "}
+                        <code style={{ color: "#94A3B8" }}>session_messages</code>,{" "}
+                        <code style={{ color: "#94A3B8" }}>agent_id</code>.{" "}
+                        It should respond with JSON:{" "}
+                        <code style={{ color: "#94A3B8" }}>{`{"response": "agent reply"}`}</code>.{" "}
+                        See docs for a Python example.
+                      </div>
+                    )}
                   </div>
                 ))}
 
@@ -723,6 +770,11 @@ export default function AdminClient() {
                         <td style={{ padding: "12px 12px" }}>
                           <div style={{ fontWeight: 600 }}>{a.name}</div>
                           <div style={{ color: "#64748B", fontSize: 11 }}>{a.framework}</div>
+                          {a.last_webhook_failure && (
+                            <div style={{ color: "#EF4444", fontSize: 10, marginTop: 2 }}>
+                              Last failure: {new Date(a.last_webhook_failure).toLocaleString()}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: "12px 12px" }}>
                           <span style={{ color: s.color, background: `${s.color}20`, padding: "2px 8px", borderRadius: 20, fontSize: 11 }}>{s.label}</span>
@@ -764,6 +816,20 @@ export default function AdminClient() {
                             >
                               🔑 Regen Key
                             </button>
+                            {a.webhook_url && (
+                              <button
+                                onClick={() => handleTestWebhook(a)}
+                                disabled={testingWebhookId === a.agent_id}
+                                style={{
+                                  background: "rgba(78,205,196,0.1)", border: "none",
+                                  color: "#4ECDC4", padding: "4px 10px", borderRadius: 6,
+                                  fontSize: 11, cursor: testingWebhookId === a.agent_id ? "not-allowed" : "pointer",
+                                  opacity: testingWebhookId === a.agent_id ? 0.6 : 1,
+                                }}
+                              >
+                                {testingWebhookId === a.agent_id ? "Testing…" : "🔗 Test Webhook"}
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

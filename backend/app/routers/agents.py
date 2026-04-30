@@ -16,6 +16,7 @@ from app.middleware.auth import get_current_user
 from app.models.agent import Agent, HumanOwner
 from app.models.user import User
 from app.services.identity import generate_keypair
+from app.services.webhook_caller import call_agent_webhook
 
 _fernet = Fernet(settings.github_token_encryption_key.encode())
 
@@ -346,3 +347,33 @@ async def register_owned_agent(
         public_key=agent.public_key,
         private_key_b64=keypair.private_key_b64,
     )
+
+
+# ── Webhook test ───────────────────────────────────────────────────────────
+
+@router.post("/{agent_id}/test-webhook", status_code=status.HTTP_200_OK)
+async def test_agent_webhook(
+    agent_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Sends a test message to the agent's webhook_url to verify it is reachable.
+
+    Returns the agent's response on success, or an error dict on failure.
+    """
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+    if agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para testear este agente.")
+    if not agent.webhook_url:
+        raise HTTPException(status_code=400, detail="Este agente no tiene webhook_url configurado.")
+
+    result = await call_agent_webhook(
+        agent=agent,
+        message="AgentLink webhook test. Please respond.",
+        session_messages=[],
+        room_id="test",
+        db=db,
+    )
+    return result

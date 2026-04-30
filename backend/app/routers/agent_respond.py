@@ -1,14 +1,17 @@
 """Agent respond router — live AI agent responses with Redis-backed rate limiting."""
 
-import uuid
+import uuid as _uuid_mod
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
 from app.services.agent_engine import AGENTS, get_agent_response, get_peer_review
+from app.services.webhook_caller import call_agent_webhook
 
 router = APIRouter(prefix="/agents", tags=["agent_respond"])
 
@@ -73,21 +76,62 @@ def _normalize_agent_id(agent_id: str) -> str:
     return _AGENT_ALIASES.get(key, "quant-z")
 
 
-@router.post("/respond", response_model=DemoResponse)
-async def agent_respond(payload: DemoRequest, request: Request):
-    agent_id = _normalize_agent_id(payload.agent_id)
-    if agent_id not in AGENTS:
-        return JSONResponse(status_code=400, content={"error": "unknown_agent", "message": f"Agent '{payload.agent_id}' could not be resolved."})
+def _is_uuid(value: str) -> bool:
+    try:
+        _uuid_mod.UUID(value)
+        return True
+    except ValueError:
+        return False
 
+
+@router.post("/respond", response_model=DemoResponse)
+async def agent_respond(
+    payload: DemoRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     ip = _client_ip(request)
     r = _redis()
 
     try:
+        # ── Try DB agent first (external agents with webhook_url) ──────────
+        if _is_uuid(payload.agent_id):
+            from app.models.agent import Agent as AgentModel
+            db_agent = await db.get(AgentModel, _uuid_mod.UUID(payload.agent_id))
+
+            if db_agent and db_agent.webhook_url:
+                result = await call_agent_webhook(
+                    agent=db_agent,
+                    message=payload.message,
+                    session_messages=payload.session_messages,
+                    room_id=payload.room_id,
+                    db=db,
+                )
+                if "error" in result:
+                    return JSONResponse(
+                        status_code=503,
+                        content=result,
+                    )
+                return DemoResponse(
+                    response=result["response"],
+                    agent_id=payload.agent_id,
+                    agent_name=db_agent.name,
+                    messages_remaining=-1,  # external agents have no demo limit
+                )
+
+        # ── Fall through to built-in demo agents ───────────────────────────
+        agent_id = _normalize_agent_id(payload.agent_id)
+        if agent_id not in AGENTS:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "unknown_agent", "message": f"Agent '{payload.agent_id}' could not be resolved."},
+            )
+
         session_key = f"demo_session:{ip}"
         session_id = await r.get(session_key)
 
         if not session_id:
-            session_id = str(uuid.uuid4())
+            session_id = str(_uuid_mod.uuid4())
             await r.set(session_key, session_id, ex=_SESSION_TTL)
 
         count_key = f"demo_messages:{session_id}"

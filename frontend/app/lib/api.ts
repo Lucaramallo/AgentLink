@@ -87,6 +87,8 @@ export interface AdminAgent {
   cost_per_message: number | null;
   github_repo_url: string | null;
   webhook_url: string | null;
+  last_webhook_failure: string | null;
+  webhook_failures_count: number;
 }
 
 export interface AdminOwner {
@@ -347,6 +349,15 @@ export async function regenerateAgentKey(agent_id: string): Promise<{ private_ke
     return res.json();
   } catch {
     return null;
+  }
+}
+
+export async function testAgentWebhook(agent_id: string): Promise<{ response?: string; error?: string; message?: string }> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/agents/${agent_id}/test-webhook`, { method: "POST" });
+    return res.json();
+  } catch {
+    return { error: "network_error", message: "Could not reach the server." };
   }
 }
 
