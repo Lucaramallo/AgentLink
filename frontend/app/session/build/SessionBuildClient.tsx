@@ -241,6 +241,67 @@ export default function SessionBuildClient() {
     setNodes(initial);
   }, [allAgents]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Init from sessionStorage (new-session flow) ──────────────────────────
+
+  const sessionContextLoadedRef = useRef(false);
+  useEffect(() => {
+    if (allAgents.length === 0 || sessionContextLoadedRef.current) return;
+    const raw = sessionStorage.getItem("al_new_session");
+    if (!raw) return;
+    sessionContextLoadedRef.current = true;
+    try {
+      const data = JSON.parse(raw) as {
+        taskDescription?: string;
+        acceptanceCriteria?: string;
+        recommendedAgents?: Array<{
+          id: string; name: string; description: string; skills: string[];
+          framework: string; public_key: string; reputationTech: number | null;
+          reputationRel: number | null; jobsCompleted: number;
+          total_jobs_disputed: number; is_active: boolean; frozen: boolean;
+          role: SessionRole;
+        }>;
+        recommendedEdges?: Array<{ a: string; b: string }>;
+      };
+      if (data.taskDescription) setTask(data.taskDescription);
+      if (data.acceptanceCriteria) setCriteria(data.acceptanceCriteria);
+      if (data.recommendedAgents && data.recommendedAgents.length > 0) {
+        const preNodes: CanvasNode[] = data.recommendedAgents.map((ra, i) => {
+          const found = allAgents.find((a) => a.id === ra.id);
+          const agent: Agent = found ?? {
+            id: ra.id, name: ra.name, description: ra.description,
+            skills: ra.skills, framework: ra.framework, public_key: ra.public_key,
+            reputationTech: ra.reputationTech, reputationRel: ra.reputationRel,
+            jobsCompleted: ra.jobsCompleted, total_jobs_disputed: ra.total_jobs_disputed,
+            is_active: ra.is_active, frozen: ra.frozen,
+          };
+          const total = data.recommendedAgents!.length;
+          const angle = total === 1 ? -Math.PI / 2 : (i / total) * 2 * Math.PI - Math.PI / 2;
+          const r = total === 1 ? 0 : 160;
+          return {
+            id: `node-${ra.id}`,
+            x: 400 + Math.cos(angle) * r,
+            y: 300 + Math.sin(angle) * r,
+            agent,
+            role: ra.role ?? "Contributor",
+          };
+        });
+        setNodes(preNodes);
+        if (data.recommendedEdges && data.recommendedEdges.length > 0) {
+          setConns(
+            data.recommendedEdges.map((e, i) => ({
+              id: `conn-${i}`,
+              fromId: `node-${e.a}`,
+              toId: `node-${e.b}`,
+            })),
+          );
+        }
+      }
+      sessionStorage.removeItem("al_new_session");
+    } catch {
+      // ignore malformed data
+    }
+  }, [allAgents]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Canvas resize ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1041,13 +1102,13 @@ export default function SessionBuildClient() {
       <header className="sticky top-0 z-30 bg-al-bg/90 backdrop-blur border-b border-al-border">
         <div className="max-w-screen-2xl mx-auto px-6 h-14 flex items-center justify-between">
           <Link
-            href="/directory"
+            href="/new-session"
             className="flex items-center gap-1.5 text-sm text-al-muted-2 hover:text-al-text transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
               <path strokeLinecap="round" strokeWidth={1.5} d="M10 3L4 8l6 5" />
             </svg>
-            Directory
+            New Session
           </Link>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">

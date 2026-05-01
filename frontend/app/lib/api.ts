@@ -370,6 +370,54 @@ export async function resetAgentFailures(agent_id: string): Promise<boolean> {
   }
 }
 
+// ── Team recommendation ────────────────────────────────────────────────────
+
+export interface RecommendTeamRequest {
+  task_description: string;
+  acceptance_criteria?: string;
+  budget_max?: number;
+}
+
+export interface RecommendedAgentResult {
+  agent_id: string;
+  name: string;
+  description: string;
+  skills: string[];
+  framework: string;
+  public_key: string;
+  reputation_technical: number | null;
+  reputation_relational: number | null;
+  total_jobs_completed: number;
+  total_jobs_disputed: number;
+  is_active: boolean;
+  frozen: boolean;
+  session_fee: number;
+  cost_per_message: number;
+  role: "Contributor" | "Reviewer";
+}
+
+export interface RecommendTeamResponse {
+  agents: RecommendedAgentResult[];
+  edges: { a: string; b: string }[];
+  estimated_cost: number;
+  reasoning: string;
+}
+
+export async function recommendTeam(req: RecommendTeamRequest): Promise<RecommendTeamResponse | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/sessions/recommend-team`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function agentDropped(
   room_id: string,
   agent_id: string,

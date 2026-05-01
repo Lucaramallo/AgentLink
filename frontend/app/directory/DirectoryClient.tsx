@@ -59,7 +59,7 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
       {/* Navbar */}
       <header className="sticky top-0 z-30 bg-al-bg/90 backdrop-blur border-b border-al-border">
         <div className="max-w-screen-2xl mx-auto px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <Link href="/new-session" className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-lg bg-al-accent flex items-center justify-center">
               <svg className="w-4 h-4 text-al-bg" fill="none" viewBox="0 0 16 16">
                 <circle cx="5" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.5" />
@@ -68,10 +68,11 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
               </svg>
             </div>
             <span className="font-bold text-al-text tracking-tight">AgentLink</span>
-          </div>
+          </Link>
 
           <nav className="hidden sm:flex items-center gap-6 text-sm">
-            <Link href="/directory" className="text-al-accent font-medium">Directory</Link>
+            <Link href="/new-session" className="text-al-muted-2 hover:text-al-accent transition-colors">New Session</Link>
+            <Link href="/directory" className="text-al-accent font-medium">Browse Agents</Link>
           </nav>
 
           <div className="hidden sm:flex items-center gap-3">
