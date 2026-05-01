@@ -87,6 +87,7 @@ async def get_agent_response(
     agent_id: str,
     message: str,
     session_messages: list[dict],
+    acting_as: dict | None = None,
 ) -> str:
     """Call the Claude API as the specified agent and return its response."""
     agent = AGENTS.get(agent_id)
@@ -122,10 +123,19 @@ async def get_agent_response(
     if messages[-1]["role"] != "user":
         messages.append({"role": "user", "content": message})
 
+    system = agent["system"]
+    if acting_as:
+        name = acting_as.get("name", "")
+        role = acting_as.get("role", "")
+        system = (
+            f"In this session you are acting as {name} with the role of {role}. "
+            f"Respond accordingly.\n\n{system}"
+        )
+
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=4096,
-        system=agent["system"],
+        system=system,
         messages=messages,
     )
 

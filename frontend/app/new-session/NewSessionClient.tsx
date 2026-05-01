@@ -28,7 +28,7 @@ interface RecommendTeamResponse {
 
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
 const OWNER_B = "7059dca2-afe8-4908-9e69-b2451b0be356";
-const DEFAULT_MAX_REVISIONS = 10;
+const DEFAULT_MAX_REVISIONS = 3;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -156,6 +156,23 @@ export default function NewSessionClient() {
   const [allAgents, setAllAgents] = useState<Agent[]>([]);
   const [pickerSearch, setPickerSearch] = useState("");
 
+  // Auth gate modal
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Restore preserved form data after login redirect
+  useEffect(() => {
+    const raw = sessionStorage.getItem("al_new_session_pending");
+    if (raw) {
+      sessionStorage.removeItem("al_new_session_pending");
+      try {
+        const saved = JSON.parse(raw);
+        if (saved.taskDescription) setTaskDescription(saved.taskDescription);
+        if (saved.acceptanceCriteria) setAcceptanceCriteria(saved.acceptanceCriteria);
+        if (saved.githubRepo) setGithubRepo(saved.githubRepo);
+      } catch {}
+    }
+  }, []);
+
   useEffect(() => {
     if (showPicker && allAgents.length === 0) {
       fetchAgents().then(setAllAgents);
@@ -258,7 +275,19 @@ export default function NewSessionClient() {
     );
   }
 
+  function savePending() {
+    sessionStorage.setItem(
+      "al_new_session_pending",
+      JSON.stringify({ taskDescription, acceptanceCriteria, githubRepo }),
+    );
+  }
+
   function handleBuildOwn() {
+    if (!isAuthenticated) {
+      savePending();
+      setShowAuthModal(true);
+      return;
+    }
     saveContext();
     router.push("/session/build");
   }
@@ -274,6 +303,11 @@ export default function NewSessionClient() {
 
   function handleAcceptTeam() {
     if (!recommendation) return;
+    if (!isAuthenticated) {
+      savePending();
+      setShowAuthModal(true);
+      return;
+    }
     setOpenError(null);
     setShowCostModal(true);
   }
@@ -374,6 +408,11 @@ export default function NewSessionClient() {
 
   function handleModifyTeam() {
     if (!recommendation) return;
+    if (!isAuthenticated) {
+      savePending();
+      setShowAuthModal(true);
+      return;
+    }
     saveContext({
       recommendedAgents: recommendation.agents,
       recommendedEdges: recommendation.edges,
@@ -437,26 +476,31 @@ export default function NewSessionClient() {
           </Link>
 
           <nav className="hidden sm:flex items-center gap-6 text-sm">
-            <Link href="/directory" className="text-al-muted-2 hover:text-al-accent transition-colors">
-              Browse Agents
-            </Link>
+            {isAuthenticated ? (
+              <>
+                <Link href="/new-session" className="text-al-accent font-medium">New Session</Link>
+                <Link href="/directory" className="text-al-muted-2 hover:text-al-accent transition-colors">Browse Agents</Link>
+              </>
+            ) : (
+              <Link href="/directory" className="text-al-muted-2 hover:text-al-accent transition-colors">Browse Agents</Link>
+            )}
           </nav>
 
           <div className="hidden sm:flex items-center gap-3">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
-              <span className="text-base leading-none">💰</span>
-              <span className="text-sm font-semibold text-amber-400">
-                {isAuthenticated && user ? user.alc_balance.toLocaleString() : balance} ALC
-              </span>
-            </div>
             {isAuthenticated && user ? (
               <>
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+                  <span className="text-base leading-none">💰</span>
+                  <span className="text-sm font-semibold text-amber-400">
+                    {user.alc_balance.toLocaleString()} ALC
+                  </span>
+                </div>
                 <span className="text-sm text-al-muted">{user.full_name}</span>
                 <Link
                   href="/admin"
                   className="text-xs text-al-muted-2 hover:text-al-accent px-2 py-1 rounded border border-al-border"
                 >
-                  Admin
+                  My Agents
                 </Link>
                 <button
                   onClick={logout}
@@ -758,6 +802,14 @@ export default function NewSessionClient() {
         </div>
       </main>
 
+      {/* ── Auth gate modal ──────────────────────────────────────────────── */}
+      {showAuthModal && (
+        <AuthGateModal
+          returnUrl="/new-session"
+          onCancel={() => setShowAuthModal(false)}
+        />
+      )}
+
       {/* ── Cost confirmation modal ──────────────────────────────────────── */}
       {showCostModal && (
         <CostConfirmModal
@@ -923,6 +975,63 @@ function CostConfirmModal({
             }}
           >
             Confirm &amp; Pay {cost} ALC
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Auth Gate Modal ─────────────────────────────────────────────────────────
+
+function AuthGateModal({
+  returnUrl,
+  onCancel,
+}: {
+  returnUrl: string;
+  onCancel: () => void;
+}) {
+  const encodedReturn = encodeURIComponent(returnUrl);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm px-4">
+      <div
+        className="bg-al-surface border border-al-border rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6"
+        style={{ boxShadow: "0 0 60px rgba(78,205,196,0.08)" }}
+      >
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center bg-al-accent/10 border border-al-accent/30">
+            <svg className="w-5 h-5 text-al-accent" fill="none" viewBox="0 0 20 20" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-al-text">Create an account to start your session</h2>
+          </div>
+        </div>
+
+        <p className="text-sm text-al-muted mb-6 mt-1">
+          Sign in or create a free account to open sessions and work with agents.
+        </p>
+
+        <div className="flex flex-col gap-2.5">
+          <a
+            href={`/login?return_url=${encodedReturn}`}
+            className="w-full flex items-center justify-center py-2.5 rounded-lg text-sm font-semibold bg-al-accent text-al-bg hover:opacity-90 transition-opacity"
+          >
+            Sign In
+          </a>
+          <a
+            href={`/register?return_url=${encodedReturn}`}
+            className="w-full flex items-center justify-center py-2.5 rounded-lg text-sm font-medium border border-al-border text-al-text hover:border-al-accent hover:text-al-accent transition-colors"
+          >
+            Create Account
+          </a>
+          <button
+            onClick={onCancel}
+            className="w-full py-2 text-xs text-al-muted hover:text-al-text transition-colors"
+          >
+            Cancel
           </button>
         </div>
       </div>

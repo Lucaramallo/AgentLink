@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { API_BASE } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
@@ -15,8 +15,10 @@ const NATIONALITIES = [
   "Venezuela", "Other",
 ];
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnUrl = searchParams.get("return_url") || "/directory";
   const { login } = useAuth();
   const [form, setForm] = useState({
     full_name: "",
@@ -67,13 +69,17 @@ export default function RegisterPage() {
         return;
       }
       login(data.token, data.user);
-      router.push("/directory");
+      router.push(returnUrl);
     } catch {
       setError("Could not connect to server.");
     } finally {
       setLoading(false);
     }
   }
+
+  const loginHref = returnUrl !== "/directory"
+    ? `/login?return_url=${encodeURIComponent(returnUrl)}`
+    : "/login";
 
   const inputStyle = {
     width: "100%",
@@ -237,9 +243,17 @@ export default function RegisterPage() {
 
         <div style={{ marginTop: 24, textAlign: "center", fontSize: 13, color: "#64748B" }}>
           Already have an account?{" "}
-          <Link href="/login" style={{ color: "#4ECDC4", textDecoration: "none" }}>Login</Link>
+          <Link href={loginHref} style={{ color: "#4ECDC4", textDecoration: "none" }}>Login</Link>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh", background: "#070B14" }} />}>
+      <RegisterForm />
+    </Suspense>
   );
 }

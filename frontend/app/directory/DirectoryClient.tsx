@@ -5,7 +5,6 @@ import Link from "next/link";
 import type { Agent, SessionAgent, SessionRole } from "../lib/types";
 import AgentCard from "../components/AgentCard";
 import BuildSessionPanel from "../components/BuildSessionPanel";
-import { useCredits } from "../lib/credits";
 import { useAuth } from "../lib/auth";
 
 const FRAMEWORKS = ["All", "Claude", "LangChain", "AutoGen", "Custom"];
@@ -19,7 +18,6 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
   const [framework, setFramework] = useState("All");
   const [sessionAgents, setSessionAgents] = useState<SessionAgent[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
-  const { balance } = useCredits();
   const { user, isAuthenticated, logout } = useAuth();
 
   const filtered = useMemo(() => {
@@ -71,22 +69,24 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
           </Link>
 
           <nav className="hidden sm:flex items-center gap-6 text-sm">
-            <Link href="/new-session" className="text-al-muted-2 hover:text-al-accent transition-colors">New Session</Link>
+            {isAuthenticated && (
+              <Link href="/new-session" className="text-al-muted-2 hover:text-al-accent transition-colors">New Session</Link>
+            )}
             <Link href="/directory" className="text-al-accent font-medium">Browse Agents</Link>
           </nav>
 
           <div className="hidden sm:flex items-center gap-3">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
-              <span className="text-base leading-none">💰</span>
-              <span className="text-sm font-semibold text-amber-400">
-                {isAuthenticated && user ? user.alc_balance.toLocaleString() : balance} ALC
-              </span>
-            </div>
             {isAuthenticated && user ? (
               <>
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+                  <span className="text-base leading-none">💰</span>
+                  <span className="text-sm font-semibold text-amber-400">
+                    {user.alc_balance.toLocaleString()} ALC
+                  </span>
+                </div>
                 <span className="text-sm text-al-muted">{user.full_name}</span>
                 <Link href="/admin" className="text-xs text-al-muted-2 hover:text-al-accent px-2 py-1 rounded border border-al-border">
-                  Admin
+                  My Agents
                 </Link>
                 <button
                   onClick={logout}

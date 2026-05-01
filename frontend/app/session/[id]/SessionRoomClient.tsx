@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { SessionRole } from "../../lib/types";
 import { useCredits } from "../../lib/credits";
 import { agentDropped } from "../../lib/api";
+import { useAuth } from "../../lib/auth";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -297,6 +298,15 @@ interface ReputationUpdate {
 export default function SessionRoomClient() {
   const { id } = useParams<{ id: string }>();
   const roomId = id ?? "";
+  const router = useRouter();
+  const { isAuthenticated, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      router.replace(`/login?return_url=${encodeURIComponent(`/session/${roomId}`)}`);
+    }
+  }, [authLoading, isAuthenticated, roomId, router]);
 
   // Canvas
   const canvasRef    = useRef<HTMLCanvasElement>(null);
@@ -325,7 +335,7 @@ export default function SessionRoomClient() {
   const [hasDeliverable, setHasDeliverable]   = useState(false);
   const [deliverableMsg, setDeliverableMsg]   = useState<Message | null>(null);
   const [showModal, setShowModal]             = useState(false);
-  const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | "INCOMPLETE" | null>(null);
+  const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | "INCOMPLETE" | "CANCELLED" | null>(null);
   const [verdictLoading, setVerdictLoading] = useState(false);
 
   // Agent failure handling
@@ -359,6 +369,12 @@ export default function SessionRoomClient() {
   const [unreadClusters, setUnreadClusters] = useState<Set<string>>(new Set());
   const activeTabRef = useRef("all");
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+
+  // Pause / cancel
+  const [isPaused, setIsPaused]           = useState(false);
+  const isPausedRef                        = useRef(false);
+  useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   // Stable refs so async callbacks always see latest graph state
   const graphEdgesRef = useRef<GraphEdge[]>([]);
@@ -403,7 +419,7 @@ export default function SessionRoomClient() {
       if (saved.agentRates) setAgentRates(saved.agentRates);
       if (saved.agentMsgRates) setAgentMsgRates(saved.agentMsgRates);
       if (saved.maxRevisionRounds != null) {
-        maxRoundsRef.current = Math.min(10, Math.max(1, saved.maxRevisionRounds));
+        maxRoundsRef.current = Math.min(5, Math.max(1, saved.maxRevisionRounds));
       }
       const restoredNodes: GraphNode[] = saved.nodes.map((n) => ({
         id: n.id,
@@ -801,7 +817,20 @@ export default function SessionRoomClient() {
   // ── Demo agent responses ──────────────────────────────────────────────────
 
   function toDemoSlug(name: string): string {
-    return name.toLowerCase();
+    const SLUG_MAP: Record<string, string> = {
+      "nexus-7":    "nexus-7",  nexus7:      "nexus-7",
+      "aria-ml":    "aria-ml",  ariaml:      "aria-ml",
+      "forge-alpha":"forge-alpha", forgealpha: "forge-alpha",
+      "scribe-pro": "scribe-pro", scribepro:  "scribe-pro",
+      "quant-z":    "quant-z",  quantz:      "quant-z",
+      "vortex-ui":  "vortex-ui", vortexui:   "vortex-ui",
+      "sigma-qa":   "sigma-qa", sigmaqa:     "sigma-qa",
+      "vector-x":   "vector-x", vectorx:     "vector-x",
+      financeagent: "quant-z",  finance:     "quant-z",
+      legalagent:   "scribe-pro", legal:     "scribe-pro",
+    };
+    const key = name.toLowerCase().replace(/[\s]/g, "");
+    return SLUG_MAP[key] ?? name.toLowerCase();
   }
 
   function isUUID(s: string): boolean {
@@ -891,6 +920,7 @@ export default function SessionRoomClient() {
       context: Message[],
       type: MessageType,
     ): Promise<Message | null> {
+      if (isPausedRef.current) return null;
       // Skip agents already dropped from this session
       if (droppedAgentIds.has(agent.id)) return null;
 
@@ -905,6 +935,7 @@ export default function SessionRoomClient() {
             room_id: roomId,
             message: prompt,
             agent_id: agentIdToSend,
+            acting_as: { name: agent.label, role: agent.role },
             session_messages: context,
           }),
         });
@@ -1007,7 +1038,7 @@ export default function SessionRoomClient() {
 
   async function sendMessage() {
     const text = inputText.trim();
-    if (!text || sending || showFailureModal) return;
+    if (!text || sending || showFailureModal || isPaused) return;
     setSending(true);
 
     const msg: Message = {
@@ -1073,6 +1104,40 @@ export default function SessionRoomClient() {
     setStatus("CLOSED_DISPUTED");
     setOutcome("INCOMPLETE");
     setShowModal(true);
+  }
+
+  function handleCancelSession() {
+    if (sessionCost == null) {
+      setMessages((prev) => [...prev, systemMsg("Session cancelled by Requester")]);
+      setStatus("CLOSED_DISPUTED");
+      setOutcome("CANCELLED");
+      setShowModal(true);
+      setShowCancelConfirm(false);
+      return;
+    }
+    const nonHumanNodes = graphNodesRef.current.filter((n) => !n.isHuman);
+    const currentMessages = messagesRef.current;
+    let actualBase = 0;
+    nonHumanNodes.forEach((n) => {
+      const sessionFee = agentRates[n.id] ?? 3;
+      const costPerMsg = agentMsgRates[n.id] ?? 1;
+      const msgCount = currentMessages.filter(
+        (m) => m.agentId === n.id && !m.isHuman && m.agentId !== "system",
+      ).length;
+      actualBase += sessionFee + msgCount * costPerMsg;
+    });
+    actualBase = Math.round(actualBase * 10) / 10;
+    const actualFee = Math.round(actualBase * 0.03 * 10) / 10;
+    const computed = Math.round((actualBase + actualFee) * 10) / 10;
+    const refund = Math.max(0, Math.round((sessionCost - computed) * 10) / 10);
+    setActualCost(computed);
+    setRefundAmount(refund);
+    if (refund > 0) add(refund);
+    setMessages((prev) => [...prev, systemMsg("Session cancelled by Requester")]);
+    setStatus("CLOSED_DISPUTED");
+    setOutcome("CANCELLED");
+    setShowModal(true);
+    setShowCancelConfirm(false);
   }
 
   // ── Escrow settlement ────────────────────────────────────────────────────
@@ -1559,6 +1624,61 @@ export default function SessionRoomClient() {
           {/* Progress + verdict controls */}
           <div className="shrink-0 border-t border-al-border bg-al-surface px-4 py-3 space-y-3">
             <ProgressBar step={step} status={status} />
+
+            {/* Session controls: pause + cancel */}
+            {!isClosed && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsPaused((p) => !p)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    background: isPaused ? "rgba(78,205,196,0.12)" : "rgba(100,116,139,0.10)",
+                    border: isPaused ? "1px solid rgba(78,205,196,0.4)" : "1px solid rgba(100,116,139,0.3)",
+                    color: isPaused ? "#4ECDC4" : "#94A3B8",
+                  }}
+                >
+                  {isPaused ? "▶ Resume" : "⏸ Pause"}
+                </button>
+                {showCancelConfirm ? (
+                  <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/5 border border-red-500/30">
+                    <span className="text-xs text-al-muted flex-1">
+                      Cancel? You&apos;ll be charged for work completed so far.
+                    </span>
+                    <button
+                      onClick={handleCancelSession}
+                      className="px-2.5 py-1 rounded text-xs font-bold bg-red-500/15 border border-red-500/40 text-red-400 hover:bg-red-500/25 transition-colors"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setShowCancelConfirm(false)}
+                      className="px-2.5 py-1 rounded text-xs text-al-muted hover:text-al-text transition-colors"
+                    >
+                      Keep
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowCancelConfirm(true)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    style={{
+                      background: "rgba(239,68,68,0.08)",
+                      border: "1px solid rgba(239,68,68,0.25)",
+                      color: "#EF4444",
+                    }}
+                  >
+                    ⏹ Cancel Session
+                  </button>
+                )}
+              </div>
+            )}
+
+            {isPaused && !isClosed && (
+              <p className="text-[10px] text-amber-400 text-center">
+                Session paused by Requester — no agent calls until resumed
+              </p>
+            )}
+
             {hasDeliverable && !isClosed && (
               <div className="flex gap-2.5">
                 <button
@@ -2102,7 +2222,7 @@ function CloseModal({
   onDownload,
   onClose,
 }: {
-  outcome: "SUCCESS" | "DISPUTED" | "INCOMPLETE";
+  outcome: "SUCCESS" | "DISPUTED" | "INCOMPLETE" | "CANCELLED";
   roomId: string;
   agents: GraphNode[];
   messages: Message[];
@@ -2121,7 +2241,8 @@ function CloseModal({
 }) {
   const isSuccess    = outcome === "SUCCESS";
   const isIncomplete = outcome === "INCOMPLETE";
-  const color        = isSuccess ? "#22C55E" : isIncomplete ? "#EF4444" : "#F59E0B";
+  const isCancelled  = outcome === "CANCELLED";
+  const color        = isSuccess ? "#22C55E" : (isIncomplete || isCancelled) ? "#EF4444" : "#F59E0B";
 
   // Per-agent cost breakdown
   const agentBreakdown = agents.map((a) => {
@@ -2159,7 +2280,7 @@ function CloseModal({
               <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke={color}>
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-            ) : isIncomplete ? (
+            ) : (isIncomplete || isCancelled) ? (
               <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke={color}>
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M18.364 5.636a9 9 0 11-12.728 0M12 3v9" />
@@ -2172,11 +2293,13 @@ function CloseModal({
             )}
           </div>
           <h2 className="text-xl font-bold text-al-text">
-            {isSuccess ? "Session Completed" : isIncomplete ? "Session Closed" : "Session Disputed"}
+            {isSuccess ? "Session Completed" : isCancelled ? "Session Cancelled" : isIncomplete ? "Session Closed" : "Session Disputed"}
           </h2>
           <p className="text-sm text-al-muted mt-1 text-center">
             {isSuccess
               ? "All parties satisfied. Escrow released to contributors."
+              : isCancelled
+              ? "Session cancelled. You have been charged for work completed so far."
               : isIncomplete
               ? "Session closed due to agent failure. Full escrow returned to you."
               : "Dispute logged on-chain. Escalated to AgentLink arbitration."}

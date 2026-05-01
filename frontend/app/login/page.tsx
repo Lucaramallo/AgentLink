@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { API_BASE } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnUrl = searchParams.get("return_url") || "/directory";
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,13 +32,17 @@ export default function LoginPage() {
         return;
       }
       login(data.token, data.user);
-      router.push("/directory");
+      router.push(returnUrl);
     } catch {
       setError("Could not connect to server.");
     } finally {
       setLoading(false);
     }
   }
+
+  const registerHref = returnUrl !== "/directory"
+    ? `/register?return_url=${encodeURIComponent(returnUrl)}`
+    : "/register";
 
   return (
     <div style={{
@@ -151,9 +157,17 @@ export default function LoginPage() {
 
         <div style={{ marginTop: 24, textAlign: "center", fontSize: 13, color: "#64748B" }}>
           {"Don't have an account? "}
-          <Link href="/register" style={{ color: "#4ECDC4", textDecoration: "none" }}>Register</Link>
+          <Link href={registerHref} style={{ color: "#4ECDC4", textDecoration: "none" }}>Register</Link>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh", background: "#070B14" }} />}>
+      <LoginForm />
+    </Suspense>
   );
 }

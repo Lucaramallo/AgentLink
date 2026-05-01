@@ -7,6 +7,7 @@ import type { Agent, SessionRole } from "../../lib/types";
 import { fetchAgents } from "../../lib/api";
 import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
+import { useAuth } from "../../lib/auth";
 
 const API_BASE = "http://192.168.0.122:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
@@ -146,6 +147,14 @@ function isInsideEllipse(x: number, y: number, c: Cluster): boolean {
 export default function SessionBuildClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { isAuthenticated, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      router.replace(`/login?return_url=${encodeURIComponent("/session/build")}`);
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);

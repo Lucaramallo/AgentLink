@@ -45,6 +45,7 @@ class DemoRequest(BaseModel):
     room_id: str
     message: str
     agent_id: str
+    acting_as: dict | None = None
     session_messages: list[dict] = []
 
 
@@ -208,6 +209,7 @@ async def agent_respond(
             agent_id=agent_id,
             message=payload.message,
             session_messages=payload.session_messages,
+            acting_as=payload.acting_as,
         )
 
         agent = AGENTS[agent_id]
