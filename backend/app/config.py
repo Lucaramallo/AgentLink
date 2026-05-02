@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     github_token_encryption_key: str = "ZmDfcTF7_60GrrY167zsiPd_GbNOCKhm3K35q4E3bnY="
     # Frontend URL for OAuth redirects
     frontend_url: str = "http://192.168.0.121:3001"
+    # GitHub REST API base URL
+    github_api_url: str = "https://api.github.com"
 
 
 settings = Settings()

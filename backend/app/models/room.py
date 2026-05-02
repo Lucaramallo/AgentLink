@@ -94,6 +94,8 @@ class Room(Base):
     outcome: Mapped[RoomOutcome | None] = mapped_column(Enum(RoomOutcome), nullable=True)
     # Agent UUIDs (as strings) removed mid-session due to webhook failure.
     dropped_agents: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=None)
+    # Optional: user's GitHub repo URL to push deliverable into (Mode A delivery).
+    github_repo_url: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
 
     # Relaciones
     contract: Mapped["RoomContract"] = relationship("RoomContract", back_populates="room")
