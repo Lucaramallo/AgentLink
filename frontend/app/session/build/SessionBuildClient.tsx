@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Agent, SessionRole } from "../../lib/types";
@@ -32,6 +32,8 @@ const ROLE_COLOR: Record<SessionRole, string> = {
 
 const CLUSTER_COLORS = ["#00BCD4", "#9575CD", "#FFB300", "#FF7043"];
 const CLUSTER_NAMES = ["Team Alpha", "Team Beta", "Team Gamma", "Team Delta", "Team Epsilon"];
+
+const ACCEPTED_TYPES = ".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.gif,.webp,.ts,.tsx,.js,.jsx,.py,.md,.txt,.json,.zip";
 
 const AL_RULES = [
   "All inter-agent messages must be cryptographically signed with the sending agent's registered key.",
@@ -212,6 +214,14 @@ export default function SessionBuildClient() {
 
   const { balance, deduct } = useCredits();
 
+  // Attachments & GitHub
+  const [githubRepo, setGithubRepo] = useState("");
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [restoredFileNames, setRestoredFileNames] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Keep refs in sync with state
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { connsRef.current = conns; }, [conns]);
@@ -262,6 +272,8 @@ export default function SessionBuildClient() {
       const data = JSON.parse(raw) as {
         taskDescription?: string;
         acceptanceCriteria?: string;
+        githubRepo?: string;
+        fileNames?: string[];
         recommendedAgents?: Array<{
           id: string; name: string; description: string; skills: string[];
           framework: string; public_key: string; reputationTech: number | null;
@@ -273,6 +285,11 @@ export default function SessionBuildClient() {
       };
       if (data.taskDescription) setTask(data.taskDescription);
       if (data.acceptanceCriteria) setCriteria(data.acceptanceCriteria);
+      if (data.githubRepo) setGithubRepo(data.githubRepo);
+      if (data.fileNames && data.fileNames.length > 0) {
+        setRestoredFileNames(data.fileNames);
+        if (!attachmentsOpen) setAttachmentsOpen(true);
+      }
       if (data.recommendedAgents && data.recommendedAgents.length > 0) {
         const preNodes: CanvasNode[] = data.recommendedAgents.map((ra, i) => {
           const found = allAgents.find((a) => a.id === ra.id);
@@ -912,6 +929,25 @@ export default function SessionBuildClient() {
     ]);
   }
 
+  // ── File upload handlers ─────────────────────────────────────────────────
+
+  const handleFiles = useCallback((files: FileList) => {
+    const incoming = Array.from(files);
+    setUploadedFiles((prev) => {
+      const names = new Set(prev.map((f) => f.name));
+      return [...prev, ...incoming.filter((f) => !names.has(f.name))];
+    });
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+    },
+    [handleFiles],
+  );
+
   // ── Zoom helpers ─────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1019,6 +1055,11 @@ export default function SessionBuildClient() {
         msgRateMap[n.id] = agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel);
       });
 
+      const allFileNames = [
+        ...uploadedFiles.map((f) => f.name),
+        ...restoredFileNames.filter((n) => !uploadedFiles.find((f) => f.name === n)),
+      ];
+
       sessionStorage.setItem(
         "agentlink_session_graph",
         JSON.stringify({
@@ -1026,6 +1067,8 @@ export default function SessionBuildClient() {
           agentRates: rateMap,
           agentMsgRates: msgRateMap,
           maxRevisionRounds: maxRevisions,
+          githubRepo: githubRepo || undefined,
+          attachedFileNames: allFileNames.length > 0 ? allFileNames : undefined,
           nodes: nodes.map((n) => ({
             id: n.id,
             agentId: n.agent.id,
@@ -1156,6 +1199,106 @@ export default function SessionBuildClient() {
           rows={2}
           className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted resize-none focus:outline-none focus:border-al-accent transition-colors"
         />
+      </div>
+
+      {/* Attachments & References */}
+      <div className="border-b border-al-border bg-al-surface flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => setAttachmentsOpen((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-2 text-xs text-al-muted hover:text-al-text transition-colors"
+        >
+          <span className="flex items-center gap-1.5 font-medium">
+            <span>📎</span>
+            <span>Attachments &amp; References</span>
+            {(uploadedFiles.length > 0 || restoredFileNames.length > 0 || githubRepo) && (
+              <span className="ml-1 px-1.5 py-0.5 rounded bg-al-accent/15 text-al-accent text-[10px] font-semibold">
+                {uploadedFiles.length + restoredFileNames.filter((n) => !uploadedFiles.find((f) => f.name === n)).length + (githubRepo ? 1 : 0)}
+              </span>
+            )}
+          </span>
+          <svg
+            className={`w-3.5 h-3.5 transition-transform ${attachmentsOpen ? "rotate-180" : ""}`}
+            fill="none" viewBox="0 0 14 14" stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeWidth={1.5} d="M3 5l4 4 4-4" />
+          </svg>
+        </button>
+
+        {attachmentsOpen && (
+          <div className="px-4 pb-3 space-y-3">
+            {/* File upload */}
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`
+                border-2 border-dashed rounded-lg px-4 py-3 text-center cursor-pointer transition-colors
+                ${isDragging
+                  ? "border-al-accent bg-al-accent/5"
+                  : "border-al-border hover:border-al-muted bg-al-bg"}
+              `}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_TYPES}
+                className="hidden"
+                onChange={(e) => { if (e.target.files) handleFiles(e.target.files); }}
+              />
+              <p className="text-xs text-al-muted pointer-events-none">
+                Drop files here or <span className="text-al-accent">click to upload</span>
+                <span className="ml-1 text-[10px]">· PDF, Excel, CSV, images, code, ZIP</span>
+              </p>
+            </div>
+
+            {/* File chips */}
+            {(uploadedFiles.length > 0 || restoredFileNames.length > 0) && (
+              <div className="flex flex-wrap gap-1.5">
+                {uploadedFiles.map((f) => (
+                  <div
+                    key={f.name}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-al-bg border border-al-border rounded text-[11px] text-al-muted-2"
+                  >
+                    <span className="max-w-[160px] truncate">{f.name}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setUploadedFiles((prev) => prev.filter((x) => x.name !== f.name)); }}
+                      className="text-al-muted hover:text-red-400 transition-colors ml-0.5"
+                    >×</button>
+                  </div>
+                ))}
+                {restoredFileNames
+                  .filter((n) => !uploadedFiles.find((f) => f.name === n))
+                  .map((name) => (
+                    <div
+                      key={name}
+                      className="flex items-center gap-1 px-2 py-0.5 bg-amber-400/5 border border-amber-400/25 rounded text-[11px] text-amber-400/70"
+                      title="Re-upload to attach actual file"
+                    >
+                      <span className="max-w-[140px] truncate">{name}</span>
+                      <span className="text-[9px] ml-0.5 opacity-60">re-upload</span>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setRestoredFileNames((prev) => prev.filter((n) => n !== name)); }}
+                        className="text-amber-400/50 hover:text-red-400 transition-colors ml-0.5"
+                      >×</button>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* GitHub repo */}
+            <input
+              value={githubRepo}
+              onChange={(e) => setGithubRepo(e.target.value)}
+              placeholder="🔗 Link a GitHub repo (optional) — https://github.com/user/repo"
+              className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-2 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+            />
+          </div>
+        )}
       </div>
 
       {/* Body */}

@@ -356,6 +356,10 @@ export default function SessionRoomClient() {
   const wsRef   = useRef<WebSocket | null>(null);
   const [wsOpen, setWsOpen] = useState(false);
 
+  // Attachments from build page
+  const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
+  const [sessionGithubRepo, setSessionGithubRepo] = useState("");
+
   // Auto-task
   const [taskDescription, setTaskDescription] = useState<string>("");
   const autoTaskSentRef = useRef(false);
@@ -411,6 +415,8 @@ export default function SessionRoomClient() {
         agentRates?: Record<string, number>;
         agentMsgRates?: Record<string, number>;
         maxRevisionRounds?: number;
+        githubRepo?: string;
+        attachedFileNames?: string[];
         nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean; clusterId?: string | null; isBuilder?: boolean }>;
         edges: Array<{ a: string; b: string }>;
         clusters?: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number }>;
@@ -418,6 +424,8 @@ export default function SessionRoomClient() {
       if (saved.sessionCost != null) setSessionCost(saved.sessionCost);
       if (saved.agentRates) setAgentRates(saved.agentRates);
       if (saved.agentMsgRates) setAgentMsgRates(saved.agentMsgRates);
+      if (saved.githubRepo) setSessionGithubRepo(saved.githubRepo);
+      if (saved.attachedFileNames && saved.attachedFileNames.length > 0) setAttachedFileNames(saved.attachedFileNames);
       if (saved.maxRevisionRounds != null) {
         maxRoundsRef.current = Math.min(5, Math.max(1, saved.maxRevisionRounds));
       }
@@ -1499,6 +1507,34 @@ export default function SessionRoomClient() {
               <span className="text-xs text-al-muted">{participantCount} participants</span>
             )}
           </div>
+
+          {/* Attachments info bar */}
+          {(attachedFileNames.length > 0 || sessionGithubRepo) && (
+            <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-al-bg border-b border-al-border text-xs text-al-muted flex-wrap">
+              {attachedFileNames.length > 0 && (
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="shrink-0">📎</span>
+                  <span className="truncate">{attachedFileNames.join(", ")}</span>
+                </span>
+              )}
+              {attachedFileNames.length > 0 && sessionGithubRepo && (
+                <span className="text-al-border">·</span>
+              )}
+              {sessionGithubRepo && (
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="shrink-0">🔗</span>
+                  <a
+                    href={sessionGithubRepo}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate text-al-accent hover:underline"
+                  >
+                    {sessionGithubRepo}
+                  </a>
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Team tabs — only shown when clusters exist */}
           {graphClusters.length > 0 && (
