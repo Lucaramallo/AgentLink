@@ -1820,6 +1820,135 @@ function StatusBadge({ status }: { status: SessionStatus }) {
   );
 }
 
+function escMd(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function applyInlineMd(s: string): string {
+  return escMd(s)
+    .replace(/`([^`]+)`/g, '<code style="font-family:monospace;font-size:0.82em;background:rgba(10,22,40,0.9);border:1px solid #1E2D4A;border-radius:3px;padding:1px 5px;color:#7dd3fc">$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="font-weight:700;color:#f1f5f9">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em style="font-style:italic;color:#cbd5e1">$1</em>');
+}
+
+function renderMarkdown(text: string): string {
+  const codeBlocks: string[] = [];
+  const withPlaceholders = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    const langAttr = lang ? ` data-lang="${escMd(lang)}"` : "";
+    codeBlocks.push(
+      `<pre${langAttr} style="background:#070e1a;border:1px solid #1E2D4A;border-radius:8px;padding:12px 14px;overflow-x:auto;margin:8px 0"><code style="font-family:monospace;font-size:0.8em;color:#93c5fd;white-space:pre">${escMd(code.replace(/\n$/, ""))}</code></pre>`
+    );
+    return `\x00BLOCK${idx}\x00`;
+  });
+
+  const lines = withPlaceholders.split("\n");
+  const out: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+
+    // code block placeholder
+    const ph = raw.trim().match(/^\x00BLOCK(\d+)\x00$/);
+    if (ph) {
+      out.push(codeBlocks[parseInt(ph[1])]);
+      i++;
+      continue;
+    }
+
+    // HR
+    if (/^-{3,}$/.test(raw.trim())) {
+      out.push('<hr style="border:none;border-top:1px solid #1E2D4A;margin:10px 0">');
+      i++;
+      continue;
+    }
+
+    // h3
+    const h3 = raw.match(/^###\s+(.+)/);
+    if (h3) {
+      out.push(`<h3 style="font-size:0.95em;font-weight:700;color:#e2e8f0;margin:10px 0 4px 0">${applyInlineMd(h3[1])}</h3>`);
+      i++;
+      continue;
+    }
+
+    // h2
+    const h2 = raw.match(/^##\s+(.+)/);
+    if (h2) {
+      out.push(`<h2 style="font-size:1.05em;font-weight:700;color:#e2e8f0;margin:12px 0 5px 0">${applyInlineMd(h2[1])}</h2>`);
+      i++;
+      continue;
+    }
+
+    // h1
+    const h1 = raw.match(/^#\s+(.+)/);
+    if (h1) {
+      out.push(`<h2 style="font-size:1.15em;font-weight:700;color:#f1f5f9;margin:12px 0 6px 0">${applyInlineMd(h1[1])}</h2>`);
+      i++;
+      continue;
+    }
+
+    // table: collect all consecutive | lines
+    if (raw.trim().startsWith("|")) {
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      const rows = tableLines
+        .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+        .filter((row) => !row.every((c) => /^[-:]+$/.test(c)));
+      if (rows.length > 0) {
+        const [hdr, ...body] = rows;
+        const th = hdr.map((c) => `<th style="padding:5px 10px;text-align:left;border-bottom:1px solid #1E2D4A;color:#94a3b8;font-weight:600;font-size:0.8em;white-space:nowrap">${applyInlineMd(c)}</th>`).join("");
+        const tb = body.map((row) =>
+          `<tr>${row.map((c) => `<td style="padding:5px 10px;border-bottom:1px solid #0d1a2e;color:#cbd5e1;font-size:0.82em">${applyInlineMd(c)}</td>`).join("")}</tr>`
+        ).join("");
+        out.push(`<div style="overflow-x:auto;margin:8px 0"><table style="width:100%;border-collapse:collapse;background:rgba(7,14,26,0.7);border:1px solid #1E2D4A;border-radius:6px"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table></div>`);
+      }
+      continue;
+    }
+
+    // unordered list: collect consecutive lines
+    if (/^\s*[-*]\s+/.test(raw)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(`<li style="margin:2px 0">${applyInlineMd(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`);
+        i++;
+      }
+      out.push(`<ul style="list-style:disc;padding-left:18px;margin:5px 0">${items.join("")}</ul>`);
+      continue;
+    }
+
+    // ordered list: collect consecutive lines
+    if (/^\d+\.\s+/.test(raw)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(`<li style="margin:2px 0">${applyInlineMd(lines[i].replace(/^\d+\.\s+/, ""))}</li>`);
+        i++;
+      }
+      out.push(`<ol style="list-style:decimal;padding-left:18px;margin:5px 0">${items.join("")}</ol>`);
+      continue;
+    }
+
+    // empty line → paragraph break
+    if (raw.trim() === "") {
+      out.push("<br>");
+      i++;
+      continue;
+    }
+
+    out.push(applyInlineMd(raw) + "<br>");
+    i++;
+  }
+
+  return out.join("");
+}
+
 function MessageBubble({
   msg,
   roomId,
@@ -1885,11 +2014,10 @@ function MessageBubble({
           </span>
         </div>
         <div
-          className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed whitespace-pre-line break-words"
+          className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
           style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
-        >
-          {msg.content}
-        </div>
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+        />
         {onDownloadDeliverable && (
           <button
             onClick={() => onDownloadDeliverable(msg)}
