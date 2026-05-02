@@ -405,6 +405,8 @@ export default function SessionRoomClient() {
     summary: string;
   } | null>(null);
   const [coordinatorPlanLoading, setCoordinatorPlanLoading] = useState(false);
+  const [editedAssignments, setEditedAssignments] = useState<Array<{ agent_id: string; agent_name: string; subtask: string }>>([]);
+  const [confirmingPlan, setConfirmingPlan] = useState(false);
   const coordinatorPlanResolveRef = useRef<(() => void) | null>(null);
   const coordinatorPlanRef = useRef<{ assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>; summary: string } | null>(null);
 
@@ -1030,6 +1032,7 @@ export default function SessionRoomClient() {
         if (res.ok) {
           const plan = await res.json();
           setCoordinatorPlan(plan);
+          setEditedAssignments(plan.assignments ?? []);
           coordinatorPlanRef.current = plan;
         }
       } catch { /* non-blocking */ }
@@ -2405,39 +2408,98 @@ export default function SessionRoomClient() {
             ) : coordinatorPlan ? (
               <div className="flex flex-col gap-4">
                 <p className="text-sm text-al-text leading-relaxed">{coordinatorPlan.summary}</p>
-                <div className="flex flex-col gap-2">
-                  {coordinatorPlan.assignments.map((a) => (
+                <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
+                  {editedAssignments.map((a, idx) => (
                     <div
                       key={a.agent_id}
                       className="flex gap-3 items-start rounded-lg p-3"
                       style={{ background: "rgba(255,107,53,0.07)", border: "1px solid rgba(255,107,53,0.2)" }}
                     >
                       <span
-                        className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mt-0.5"
+                        className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mt-1"
                         style={{ background: "rgba(255,107,53,0.18)", color: "#FF6B35" }}
                       >
                         {a.agent_name.slice(0, 1).toUpperCase()}
                       </span>
-                      <div>
-                        <p className="text-xs font-semibold text-white">{a.agent_name}</p>
-                        <p className="text-xs text-al-muted mt-0.5 leading-relaxed">{a.subtask}</p>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-white mb-1">{a.agent_name}</p>
+                        <textarea
+                          value={a.subtask}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditedAssignments((prev) =>
+                              prev.map((x, i) => (i === idx ? { ...x, subtask: val } : x)),
+                            );
+                          }}
+                          rows={2}
+                          className="w-full text-xs bg-black/20 border border-white/10 rounded px-2 py-1.5 text-al-text placeholder:text-al-muted focus:outline-none focus:border-orange-500/50 transition-colors resize-none"
+                        />
                       </div>
                     </div>
                   ))}
                 </div>
+                <p className="text-[11px] text-al-muted text-center">You can edit any subtask above before confirming.</p>
               </div>
             ) : (
-              <p className="text-sm text-al-muted py-4 text-center">Could not generate plan — proceeding without it.</p>
+              <p className="text-sm text-al-muted py-4 text-center">Could not generate plan — skip to proceed without subtask assignment.</p>
             )}
 
-            <button
-              onClick={() => { if (!coordinatorPlanLoading) coordinatorPlanResolveRef.current?.(); }}
-              disabled={coordinatorPlanLoading}
-              className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: "rgba(255,107,53,0.15)", border: "1px solid rgba(255,107,53,0.45)", color: "#FF6B35" }}
-            >
-              {coordinatorPlanLoading ? "Generating plan…" : "Start Session →"}
-            </button>
+            <div className="flex gap-3">
+              {/* Skip — clears plan, starts R1 with no subtask injection */}
+              <button
+                onClick={() => {
+                  coordinatorPlanRef.current = null;
+                  coordinatorPlanResolveRef.current?.();
+                }}
+                disabled={coordinatorPlanLoading || confirmingPlan}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: "rgba(100,116,139,0.1)", border: "1px solid rgba(100,116,139,0.3)", color: "#94A3B8" }}
+              >
+                Skip
+              </button>
+
+              {/* Confirm — PUT edited plan, then start R1 */}
+              <button
+                onClick={async () => {
+                  if (coordinatorPlanLoading || confirmingPlan) return;
+                  setConfirmingPlan(true);
+                  try {
+                    const body = {
+                      assignments: editedAssignments,
+                      summary: coordinatorPlan?.summary ?? "",
+                    };
+                    const res = await fetch(`${API}/rooms/${roomId}/coordinator/plan`, {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                      body: JSON.stringify(body),
+                    });
+                    if (res.ok) {
+                      const saved = await res.json();
+                      coordinatorPlanRef.current = saved;
+                    } else {
+                      // Still proceed — backend plan already saved from generate step
+                      coordinatorPlanRef.current = { assignments: editedAssignments, summary: coordinatorPlan?.summary ?? "" };
+                    }
+                  } catch {
+                    coordinatorPlanRef.current = { assignments: editedAssignments, summary: coordinatorPlan?.summary ?? "" };
+                  } finally {
+                    setConfirmingPlan(false);
+                    coordinatorPlanResolveRef.current?.();
+                  }
+                }}
+                disabled={coordinatorPlanLoading || confirmingPlan || !coordinatorPlan}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                style={{ background: "rgba(255,107,53,0.15)", border: "1px solid rgba(255,107,53,0.45)", color: "#FF6B35" }}
+              >
+                {confirmingPlan && (
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                )}
+                {coordinatorPlanLoading ? "Generating plan…" : confirmingPlan ? "Saving…" : "Confirm Plan →"}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -886,6 +886,30 @@ export default function SessionBuildClient() {
         setContextMenu(null);
         return;
       }
+      // Auto-connect the Coordinator to every non-human, non-Observer agent
+      const targets = nodesRef.current.filter(
+        (n) => n.id !== nodeId && !n.isHuman && n.role !== "Observer",
+      );
+      setConns((prev) => {
+        const next = [...prev];
+        for (const t of targets) {
+          const alreadyLinked = next.some(
+            (c) =>
+              (c.fromId === nodeId && c.toId === t.id) ||
+              (c.fromId === t.id && c.toId === nodeId),
+          );
+          if (!alreadyLinked) {
+            next.push({ id: `${nodeId}-${t.id}`, fromId: nodeId, toId: t.id });
+          }
+        }
+        return next;
+      });
+    } else {
+      // If node was a Coordinator being demoted, remove its auto-edges
+      const wasCoordinator = nodesRef.current.find((n) => n.id === nodeId)?.role === "Coordinator";
+      if (wasCoordinator) {
+        setConns((prev) => prev.filter((c) => c.fromId !== nodeId && c.toId !== nodeId));
+      }
     }
     setNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, role } : n)));
     setContextMenu(null);

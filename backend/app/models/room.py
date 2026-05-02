@@ -20,6 +20,16 @@ from sqlalchemy.sql import func
 from app.database import Base
 
 
+class AgentRole(str, enum.Enum):
+    """Valid agent roles within a session. Stored as strings in JSONB — no DB migration needed."""
+    CONTRIBUTOR = "Contributor"
+    REVIEWER    = "Reviewer"
+    OBSERVER    = "Observer"
+    COORDINATOR = "Coordinator"
+    BUILDER     = "Builder"
+    HUMAN       = "Human"
+
+
 class RoomStatus(str, enum.Enum):
     OPEN = "OPEN"
     REVISION = "REVISION"
