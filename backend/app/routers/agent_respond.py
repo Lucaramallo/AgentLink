@@ -47,6 +47,7 @@ class DemoRequest(BaseModel):
     agent_id: str
     acting_as: dict | None = None
     session_messages: list[dict] = []
+    subtask: str | None = None
 
 
 class DemoResponse(BaseModel):
@@ -205,11 +206,21 @@ async def agent_respond(
         if new_count == 1:
             await r.expire(count_key, _SESSION_TTL)
 
+        # Look up coordinator subtask from room plan if not explicitly provided
+        subtask = payload.subtask
+        if subtask is None and _is_uuid(payload.room_id) and _is_uuid(payload.agent_id):
+            from app.models.room import Room as _RoomModel
+            from app.services.coordinator_service import get_agent_subtask as _get_subtask
+            _room = await db.get(_RoomModel, _uuid_mod.UUID(payload.room_id))
+            if _room and _room.coordinator_plan:
+                subtask = _get_subtask(_room, payload.agent_id)
+
         text = await get_agent_response(
             agent_id=agent_id,
             message=payload.message,
             session_messages=payload.session_messages,
             acting_as=payload.acting_as,
+            subtask=subtask,
         )
 
         agent = AGENTS[agent_id]

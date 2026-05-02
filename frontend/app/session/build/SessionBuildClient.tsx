@@ -22,12 +22,13 @@ function parseTimeoutHours(s: string): number {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const NR = 44;
-const ROLES: SessionRole[] = ["Requester", "Contributor", "Reviewer", "Observer"];
+const ROLES: SessionRole[] = ["Requester", "Contributor", "Reviewer", "Observer", "Coordinator"];
 const ROLE_COLOR: Record<SessionRole, string> = {
   Requester: "#4ECDC4",
   Contributor: "#818CF8",
   Reviewer: "#F59E0B",
   Observer: "#64748B",
+  Coordinator: "#FF6B35",
 };
 
 const CLUSTER_COLORS = ["#00BCD4", "#9575CD", "#FFB300", "#FF7043"];
@@ -527,6 +528,16 @@ export default function SessionBuildClient() {
         ctx.lineTo(node.x, node.y + NR);
         ctx.lineTo(node.x - NR, node.y);
         ctx.closePath();
+      } else if (node.role === "Coordinator") {
+        // Hexagon for Coordinator nodes
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const angle = (Math.PI / 3) * i - Math.PI / 6;
+          const hx = node.x + NR * Math.cos(angle);
+          const hy = node.y + NR * Math.sin(angle);
+          if (i === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+        }
+        ctx.closePath();
       } else {
         ctx.beginPath();
         ctx.arc(node.x, node.y, NR, 0, Math.PI * 2);
@@ -554,6 +565,24 @@ export default function SessionBuildClient() {
       }
       if (label !== node.agent.name) label += "…";
       ctx.fillText(label, node.x, node.y + 10);
+
+      // Coordinator crown badge (top-left of node)
+      if (node.role === "Coordinator") {
+        const cx = node.x - NR * 0.68;
+        const cy = node.y - NR * 0.68;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+        ctx.fillStyle = "#FF6B35";
+        ctx.fill();
+        ctx.strokeStyle = "#0B1120";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.font = `bold 8px ${FONT}`;
+        ctx.fillStyle = "#0B1120";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("C", cx, cy + 0.5);
+      }
 
       // Builder badge (top-right of node)
       if (node.isBuilder) {
@@ -849,6 +878,15 @@ export default function SessionBuildClient() {
   // ── Context menu actions ─────────────────────────────────────────────────
 
   function setRole(nodeId: string, role: SessionRole) {
+    if (role === "Coordinator") {
+      const alreadyHasCoordinator = nodesRef.current.some(
+        (n) => n.id !== nodeId && n.role === "Coordinator",
+      );
+      if (alreadyHasCoordinator) {
+        setContextMenu(null);
+        return;
+      }
+    }
     setNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, role } : n)));
     setContextMenu(null);
   }
@@ -1446,26 +1484,34 @@ export default function SessionBuildClient() {
                 <div className="px-3 py-1.5 text-[10px] text-al-muted uppercase tracking-wider border-b border-al-border mb-1">
                   Set Role
                 </div>
-                {ROLES.map((role) => (
-                  <button
-                    key={role}
-                    onClick={() => setRole(contextMenu.nodeId, role)}
-                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-al-border/30 transition-colors"
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ background: ROLE_COLOR[role] }}
-                    />
-                    <span className={node.role === role ? "text-al-accent" : "text-al-text"}>
-                      {role}
-                    </span>
-                    {node.role === role && (
-                      <svg className="w-3 h-3 ml-auto text-al-accent" fill="none" viewBox="0 0 12 12" stroke="currentColor">
-                        <path strokeLinecap="round" strokeWidth={1.5} d="M2 6l3 3 5-5" />
-                      </svg>
-                    )}
-                  </button>
-                ))}
+                {ROLES.map((role) => {
+                  const coordinatorTaken =
+                    role === "Coordinator" &&
+                    node.role !== "Coordinator" &&
+                    nodes.some((n) => n.id !== contextMenu.nodeId && n.role === "Coordinator");
+                  return (
+                    <button
+                      key={role}
+                      onClick={() => setRole(contextMenu.nodeId, role)}
+                      disabled={coordinatorTaken}
+                      className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm transition-colors ${coordinatorTaken ? "opacity-40 cursor-not-allowed" : "hover:bg-al-border/30"}`}
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ background: ROLE_COLOR[role] }}
+                      />
+                      <span className={node.role === role ? "text-al-accent" : "text-al-text"}>
+                        {role}
+                        {coordinatorTaken && <span className="text-al-muted text-[10px] ml-1">(max 1)</span>}
+                      </span>
+                      {node.role === role && (
+                        <svg className="w-3 h-3 ml-auto text-al-accent" fill="none" viewBox="0 0 12 12" stroke="currentColor">
+                          <path strokeLinecap="round" strokeWidth={1.5} d="M2 6l3 3 5-5" />
+                        </svg>
+                      )}
+                    </button>
+                  );
+                })}
                 <div className="border-t border-al-border mt-1 pt-1">
                   {/* Builder toggle */}
                   <button

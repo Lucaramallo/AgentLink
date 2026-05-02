@@ -317,6 +317,23 @@ export default function NewSessionClient() {
     setOpenLoading(true);
     setOpenError(null);
     try {
+      // Upload attached files and get their text content for agent context
+      let fileContext = "";
+      if (uploadedFiles.length > 0) {
+        try {
+          const formData = new FormData();
+          uploadedFiles.forEach((f) => formData.append("files", f));
+          const uploadRes = await fetch(`${API_BASE}/api/v1/sessions/upload-files`, {
+            method: "POST",
+            body: formData,
+          });
+          if (uploadRes.ok) {
+            const uploadData = await uploadRes.json();
+            fileContext = uploadData.file_context ?? "";
+          }
+        } catch { /* proceed without file context if upload fails */ }
+      }
+
       const agents = recommendation.agents;
       if (agents.length < 2) {
         setOpenError("At least 2 agents are required to open a session");
@@ -396,8 +413,27 @@ export default function NewSessionClient() {
           nodes: nodeList,
           edges: recommendation.edges.map((e) => ({ a: e.a, b: e.b })),
           clusters: [],
+          fileContext,
+          attachedFileNames: uploadedFiles.map((f) => f.name),
+          githubRepo,
         }),
       );
+
+      // Register session graph with backend for turn order tracking (fire-and-forget)
+      fetch(`${API_BASE}/api/v1/rooms/${room_id}/session-graph`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agents: nodeList.map((n) => ({
+            id: n.id,
+            name: n.agentName,
+            role: n.role,
+            is_human: false,
+          })),
+          edges: recommendation.edges.map((e) => ({ from: e.a, to: e.b })),
+          thinking_timeout_secs: 60,
+        }),
+      }).catch(() => {});
 
       router.push(`/session/${room_id}`);
     } catch (err) {

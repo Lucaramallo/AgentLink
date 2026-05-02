@@ -177,6 +177,36 @@ async def session_reputation_update(
         }
 
     await db.flush()
+
+    # Patch dataset with final ratings (non-blocking)
+    try:
+        import asyncio as _asyncio
+        import uuid as _uuid
+        from app.services.dataset_service import update_session_ratings as _update_ratings
+
+        _avg_peer = (
+            round(sum(payload.peer_scores.values()) / len(payload.peer_scores), 2)
+            if payload.peer_scores else None
+        )
+        _human_team = float(team_rating) if team_rating > 0 else None
+        _per_human: dict[str, float] = {
+            aid: float(individual.get(aid, team_rating) or team_rating)
+            for aid in [a.id for a in payload.agents]
+        } if has_human else {}
+
+        _asyncio.create_task(
+            _update_ratings(
+                db=db,
+                room_id=_uuid.UUID(payload.room_id),
+                human_team_rating=_human_team,
+                average_peer_rating=_avg_peer,
+                per_agent_peer_scores=payload.peer_scores or None,
+                per_agent_human_scores=_per_human or None,
+            )
+        )
+    except Exception:
+        pass
+
     return {"room_id": payload.room_id, "reputation_updates": results}
 
 

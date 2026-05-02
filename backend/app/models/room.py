@@ -1,4 +1,4 @@
-"""Modelos de Sala de Colaboración: Room, RoomContract, Message — Módulo 2."""
+"""Modelos de Sala de Colaboración: Room, RoomContract, Message, Poll — Módulo 2."""
 
 import enum
 import uuid
@@ -41,6 +41,27 @@ class MessageType(str, enum.Enum):
     VERIFICATION = "VERIFICATION"
     REVISION_REQUEST = "REVISION_REQUEST"
     SYSTEM = "SYSTEM"
+    POLL_EVENT = "POLL_EVENT"
+
+
+class PollStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+    VETOED = "VETOED"
+
+
+class PollScope(str, enum.Enum):
+    ALL = "ALL"
+    CONTRIBUTORS_ONLY = "CONTRIBUTORS_ONLY"
+    REVIEWERS_ONLY = "REVIEWERS_ONLY"
+
+
+class PollActionType(str, enum.Enum):
+    OPEN_ROUND = "OPEN_ROUND"
+    SKIP_AGENT = "SKIP_AGENT"
+    REASSIGN_BUILDER = "REASSIGN_BUILDER"
+    CUSTOM_MESSAGE = "CUSTOM_MESSAGE"
+    CONSENSUS = "CONSENSUS"
 
 
 class RoomContract(Base):
@@ -96,6 +117,14 @@ class Room(Base):
     dropped_agents: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=None)
     # Optional: user's GitHub repo URL to push deliverable into (Mode A delivery).
     github_repo_url: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
+    # Resulting GitHub branch URL after deliver-github is called.
+    github_delivery_url: Mapped[str | None] = mapped_column(String(1000), nullable=True, default=None)
+    # Full agent/edge graph for turn order. Set once when the session opens.
+    session_graph: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    # Seconds an agent may stay in THINKING before being marked SKIPPED.
+    thinking_timeout_secs: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    # Coordinator-generated task plan: {"assignments": [{agent_id, agent_name, subtask}...], "summary": "..."}
+    coordinator_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
 
     # Relaciones
     contract: Mapped["RoomContract"] = relationship("RoomContract", back_populates="room")
@@ -128,3 +157,44 @@ class Message(Base):
 
     # Relación
     room: Mapped["Room"] = relationship("Room", back_populates="messages")
+
+
+class Poll(Base):
+    """Poll propuesto por un agente o humano durante una sesión — inmutable tras cierre."""
+
+    __tablename__ = "polls"
+
+    poll_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    room_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rooms.room_id"), nullable=False, index=True
+    )
+    # UUID string of the proposing agent, or "human" for the session's human user
+    proposed_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    proposed_by_type: Mapped[str] = mapped_column(String(16), nullable=False)  # "agent" | "human"
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    # list[str] — 2 to 4 options
+    options: Mapped[list] = mapped_column(JSONB, nullable=False)
+    # list[{voter_id, voter_type, option_index, weight}] — append-only
+    votes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[PollStatus] = mapped_column(
+        Enum(PollStatus), default=PollStatus.OPEN, nullable=False
+    )
+    scope: Mapped[PollScope] = mapped_column(
+        Enum(PollScope), default=PollScope.ALL, nullable=False
+    )
+    deadline_secs: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
+    action_type: Mapped[PollActionType | None] = mapped_column(
+        Enum(PollActionType), nullable=True
+    )
+    # Extra params for the action, e.g. {"agent_id": "..."} for SKIP_AGENT
+    action_params: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    # {winning_option_index, winning_label, weighted_totals: [float], action_applied: bool}
+    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ed25519 signature over canonical_poll_string()
+    signature: Mapped[str] = mapped_column(Text, nullable=False)

@@ -13,7 +13,7 @@ export interface Agent {
   frozen: boolean;
 }
 
-export type SessionRole = "Requester" | "Contributor" | "Reviewer" | "Observer";
+export type SessionRole = "Requester" | "Contributor" | "Reviewer" | "Observer" | "Coordinator";
 
 export interface SessionAgent {
   agent: Agent;

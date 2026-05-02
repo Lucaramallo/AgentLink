@@ -7,6 +7,7 @@ import type { SessionRole } from "../../lib/types";
 import { useCredits } from "../../lib/credits";
 import { agentDropped } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
+import PollCard, { type PollType } from "./PollCard";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -19,11 +20,12 @@ const ROLE_COLOR: Record<SessionRole, string> = {
   Contributor: "#818CF8",
   Reviewer:    "#F59E0B",
   Observer:    "#64748B",
+  Coordinator: "#FF6B35",
 };
 const HUMAN_COLOR = "#F0A500";
 
 // UI message type labels (superset of backend enum)
-type MessageType   = "TASK" | "DELIVERABLE" | "VERIFYING" | "EXIT KEY" | "SYSTEM" | "R1" | "R2" | "R3";
+type MessageType   = "TASK" | "DELIVERABLE" | "VERIFYING" | "EXIT KEY" | "SYSTEM" | "R1" | "R2" | "R3" | "POLL_EVENT";
 type SessionStatus = "OPEN" | "VERIFYING" | "CLOSED_SUCCESS" | "CLOSED_DISPUTED";
 
 // Map UI type → backend MessageType enum value
@@ -36,6 +38,7 @@ const BACKEND_TYPE: Record<MessageType, string> = {
   R1:          "TASK",
   R2:          "TASK",
   R3:          "TASK",
+  POLL_EVENT:  "POLL_EVENT",
 };
 
 // Map backend RoomStatus → UI SessionStatus
@@ -56,6 +59,7 @@ const MSG_COLOR: Record<MessageType, { bg: string; text: string; border: string 
   R1:          { bg: "rgba(59,130,246,0.12)",  text: "#60A5FA", border: "rgba(59,130,246,0.35)"  },
   R2:          { bg: "rgba(234,179,8,0.12)",   text: "#EAB308", border: "rgba(234,179,8,0.35)"   },
   R3:          { bg: "rgba(249,115,22,0.12)",  text: "#FB923C", border: "rgba(249,115,22,0.35)"  },
+  POLL_EVENT:  { bg: "rgba(168,85,247,0.12)", text: "#A855F7", border: "rgba(168,85,247,0.35)"  },
 };
 
 const STATUS_STEP: Record<SessionStatus, number> = {
@@ -101,6 +105,7 @@ interface Message {
   sigValid: boolean;
   ts: string;
   isHuman?: boolean;
+  contentStructured?: Record<string, unknown>;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -299,7 +304,7 @@ export default function SessionRoomClient() {
   const { id } = useParams<{ id: string }>();
   const roomId = id ?? "";
   const router = useRouter();
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, loading: authLoading, user, token } = useAuth();
 
   useEffect(() => {
     if (authLoading) return;
@@ -338,6 +343,10 @@ export default function SessionRoomClient() {
   const [outcome, setOutcome]               = useState<"SUCCESS" | "DISPUTED" | "INCOMPLETE" | "CANCELLED" | null>(null);
   const [verdictLoading, setVerdictLoading] = useState(false);
 
+  // GitHub delivery
+  const [githubPushing, setGithubPushing]       = useState(false);
+  const [githubDeliveryUrl, setGithubDeliveryUrl] = useState<string | null>(null);
+
   // Agent failure handling
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [failedAgent, setFailedAgent]           = useState<{ id: string; name: string } | null>(null);
@@ -359,6 +368,44 @@ export default function SessionRoomClient() {
   // Attachments from build page
   const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
   const [sessionGithubRepo, setSessionGithubRepo] = useState("");
+  const fileContextRef = useRef("");
+
+  // Turn order visual state
+  type AgentDisplayState = "idle" | "thinking" | "responded" | "skipped";
+  const [agentDisplayStates, setAgentDisplayStates] = useState<Record<string, AgentDisplayState>>({});
+  const [currentSpeaker, setCurrentSpeaker] = useState<{ name: string; round: string } | null>(null);
+  const agentDisplayStatesRef = useRef<Record<string, AgentDisplayState>>({});
+  useEffect(() => { agentDisplayStatesRef.current = agentDisplayStates; }, [agentDisplayStates]);
+
+  // Polls
+  const [polls, setPolls] = useState<PollType[]>([]);
+  const [humanVotedPollIds, setHumanVotedPollIds] = useState<Set<string>>(new Set());
+
+  // Failure feedback modal (mandatory for non-CONFORME outcomes)
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [fbText, setFbText] = useState("");
+  const [fbReason, setFbReason] = useState("");
+  const [fbAgents, setFbAgents] = useState<string[]>([]);
+  const [fbRetry, setFbRetry] = useState<boolean | null>(null);
+  const [fbSubmitting, setFbSubmitting] = useState(false);
+
+  // Propose Poll modal
+  const [showProposePoll, setShowProposePoll] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState(["", ""]);
+  const [pollScope, setPollScope] = useState<"ALL" | "CONTRIBUTORS_ONLY" | "REVIEWERS_ONLY">("ALL");
+  const [pollActionType, setPollActionType] = useState<string>("CONSENSUS");
+  const [pollDeadline, setPollDeadline] = useState(120);
+  const [pollSubmitting, setPollSubmitting] = useState(false);
+
+  // Coordinator plan pre-session step
+  const [showCoordinatorPlan, setShowCoordinatorPlan] = useState(false);
+  const [coordinatorPlan, setCoordinatorPlan] = useState<{
+    assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>;
+    summary: string;
+  } | null>(null);
+  const [coordinatorPlanLoading, setCoordinatorPlanLoading] = useState(false);
+  const coordinatorPlanResolveRef = useRef<(() => void) | null>(null);
 
   // Auto-task
   const [taskDescription, setTaskDescription] = useState<string>("");
@@ -417,6 +464,7 @@ export default function SessionRoomClient() {
         maxRevisionRounds?: number;
         githubRepo?: string;
         attachedFileNames?: string[];
+        fileContext?: string;
         nodes: Array<{ id: string; agentId: string; agentName: string; role: SessionRole; label: string; x: number; y: number; isHuman: boolean; clusterId?: string | null; isBuilder?: boolean }>;
         edges: Array<{ a: string; b: string }>;
         clusters?: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number }>;
@@ -426,6 +474,7 @@ export default function SessionRoomClient() {
       if (saved.agentMsgRates) setAgentMsgRates(saved.agentMsgRates);
       if (saved.githubRepo) setSessionGithubRepo(saved.githubRepo);
       if (saved.attachedFileNames && saved.attachedFileNames.length > 0) setAttachedFileNames(saved.attachedFileNames);
+      if (saved.fileContext) fileContextRef.current = saved.fileContext;
       if (saved.maxRevisionRounds != null) {
         maxRoundsRef.current = Math.min(5, Math.max(1, saved.maxRevisionRounds));
       }
@@ -626,6 +675,36 @@ export default function SessionRoomClient() {
         ctx.fillText("B", bx, by + 0.5);
       }
 
+      // Turn-order state badge (top-left of node)
+      if (!node.isHuman) {
+        const ds = agentDisplayStatesRef.current[node.id];
+        if (ds === "thinking") {
+          // Dashed outer ring — "speaking now"
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, NR + 7, 0, Math.PI * 2);
+          ctx.strokeStyle = "#4ECDC4";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else if (ds === "responded" || ds === "skipped") {
+          const sbx = node.x - NR * 0.68;
+          const sby = node.y - NR * 0.68;
+          ctx.beginPath();
+          ctx.arc(sbx, sby, 8, 0, Math.PI * 2);
+          ctx.fillStyle = ds === "responded" ? "#22C55E" : "#F59E0B";
+          ctx.fill();
+          ctx.strokeStyle = "#0B1120";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.font = `bold 9px ${FONT}`;
+          ctx.fillStyle = "#0B1120";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(ds === "responded" ? "✓" : "✕", sbx, sby + 0.5);
+        }
+      }
+
       const badgeY = node.y + NR + 11;
       ctx.font = `bold 8px ${FONT}`;
       const bw = ctx.measureText(node.role.toUpperCase()).width + 12;
@@ -644,7 +723,7 @@ export default function SessionRoomClient() {
     }
 
     ctx.restore();
-  }, [graphNodes, graphEdges, graphClusters, canvasW, canvasH]);
+  }, [graphNodes, graphEdges, graphClusters, canvasW, canvasH, agentDisplayStates]);
 
   // ── Auto-scroll ──────────────────────────────────────────────────────────
 
@@ -680,6 +759,9 @@ export default function SessionRoomClient() {
   useEffect(() => {
     if (!wsOpen || !taskDescription || autoTaskSentRef.current) return;
     autoTaskSentRef.current = true;
+    const fullTaskContent = fileContextRef.current
+      ? `${taskDescription}\n\n--- Attached Files ---\n\n${fileContextRef.current}`
+      : taskDescription;
     const taskMsg: Message = {
       id: `auto-task-${Date.now()}`,
       agentId: "human",
@@ -687,13 +769,13 @@ export default function SessionRoomClient() {
       agentOrg: "Human",
       role: "Requester",
       type: "TASK",
-      content: taskDescription,
+      content: fullTaskContent,
       sigValid: true,
       ts: new Date().toISOString(),
       isHuman: true,
     };
     setMessages([taskMsg]);
-    callDemoAgents(taskDescription, [taskMsg]);
+    callDemoAgents(fullTaskContent, [taskMsg]);
   }, [wsOpen, taskDescription]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Fetch room data → build agent graph ──────────────────────────────────
@@ -812,6 +894,48 @@ export default function SessionRoomClient() {
         } else if (data.type === "status_update") {
           const s: string = data.data?.status ?? "";
           if (UI_STATUS[s]) setStatus(UI_STATUS[s]);
+        } else if (data.type === "agent_state_change") {
+          const { agent_id, state, round } = (data.data ?? {}) as { agent_id?: string; state?: string; round?: number };
+          if (agent_id && state) {
+            const stateMap: Record<string, AgentDisplayState> = {
+              PENDING: "idle", THINKING: "thinking", RESPONDED: "responded", SKIPPED: "skipped",
+            };
+            const ds = stateMap[state] ?? "idle";
+            setAgentDisplayStates((prev) => ({ ...prev, [agent_id]: ds }));
+            if (ds === "thinking") {
+              const agentName = graphNodesRef.current.find((n) => n.id === agent_id)?.label ?? agent_id;
+              setCurrentSpeaker({ name: agentName, round: `Round ${round ?? "?"}` });
+            } else if (ds === "responded" || ds === "skipped") {
+              setCurrentSpeaker((prev) =>
+                prev?.name === graphNodesRef.current.find((n) => n.id === agent_id)?.label ? null : prev
+              );
+            }
+          }
+        } else if (data.type === "poll_created") {
+          const poll = data.data as PollType;
+          setPolls((prev) => [poll, ...prev]);
+          // Inject a synthetic POLL_EVENT message into the chat timeline
+          const pollMsg: Message = {
+            id: `poll-${poll.poll_id}`,
+            agentId: "system",
+            agentName: "AgentLink",
+            agentOrg: "Protocol",
+            role: "Observer",
+            type: "POLL_EVENT",
+            content: `[Poll] ${poll.question}`,
+            sigValid: true,
+            ts: poll.created_at,
+            contentStructured: { poll_id: poll.poll_id },
+          };
+          setMessages((prev) => prev.some((m) => m.id === pollMsg.id) ? prev : [...prev, pollMsg]);
+          triggerAgentAutoVote(poll);
+        } else if (
+          data.type === "poll_updated" ||
+          data.type === "poll_closed" ||
+          data.type === "poll_vetoed"
+        ) {
+          const updated = data.data as PollType;
+          setPolls((prev) => prev.map((p) => p.poll_id === updated.poll_id ? updated : p));
         }
       } catch { /* ignore malformed frames */ }
     };
@@ -845,14 +969,80 @@ export default function SessionRoomClient() {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
   }
 
+  function sortAgentsByPriority(agentList: GraphNode[]): GraphNode[] {
+    const priority = (role: string): number => {
+      if (role === "Reviewer") return 1;
+      if (role === "Contributor" || role === "Builder") return 2;
+      if (role === "Observer") return 3;
+      return 4;
+    };
+    return [...agentList].sort((a, b) => priority(a.role) - priority(b.role));
+  }
+
+  async function pushToGitHub() {
+    if (!deliverableMsg || !token) return;
+    setGithubPushing(true);
+    try {
+      const sessionLog = messagesRef.current
+        .map((m) => `**${m.agentName ?? "System"}** (${m.role})\n\n${m.content}`)
+        .join("\n\n---\n\n");
+      const agentsContributions = graphNodesRef.current
+        .filter((n) => !n.isHuman)
+        .map((n) => ({
+          name: n.label,
+          role: n.role,
+          message_count: messagesRef.current.filter((m) => m.agentId === n.id).length,
+        }));
+      const res = await fetch(`${API}/rooms/${roomId}/deliver-github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({
+          deliverable_content: deliverableMsg.content,
+          session_log: sessionLog,
+          agents_contributions: agentsContributions,
+          ...(sessionGithubRepo ? { github_repo_url: sessionGithubRepo } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail ?? "GitHub delivery failed");
+      setGithubDeliveryUrl(data.branch_url);
+    } catch (err) {
+      console.error("[GitHub delivery]", err);
+    } finally {
+      setGithubPushing(false);
+    }
+  }
+
   async function callDemoAgents(humanText: string, sessionMessages: Message[]) {
-    const agents = graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer");
+    const agents = sortAgentsByPriority(
+      graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator")
+    );
     if (agents.length === 0) return;
+
+    // ── Coordinator pre-round plan ─────────────────────────────────────────
+    const hasCoordinator = graphNodesRef.current.some((n) => n.role === "Coordinator");
+    if (hasCoordinator) {
+      setCoordinatorPlanLoading(true);
+      setShowCoordinatorPlan(true);
+      try {
+        const res = await fetch(`${API}/rooms/${roomId}/coordinator/generate`, { method: "POST" });
+        if (res.ok) {
+          const plan = await res.json();
+          setCoordinatorPlan(plan);
+        }
+      } catch { /* non-blocking */ }
+      setCoordinatorPlanLoading(false);
+      // Wait for user to confirm or skip
+      await new Promise<void>((resolve) => {
+        coordinatorPlanResolveRef.current = resolve;
+      });
+      setShowCoordinatorPlan(false);
+    }
 
     const maxRounds = maxRoundsRef.current;
     const builderAgents = agents.filter((n) => n.isBuilder);
     // Final round: builders only if any are designated, otherwise all agents
-    const finalRoundAgents = builderAgents.length > 0 ? builderAgents : agents;
+    const finalRoundAgents = sortAgentsByPriority(builderAgents.length > 0 ? builderAgents : agents);
 
     roundsCompletedRef.current = 0;
 
@@ -988,12 +1178,54 @@ export default function SessionRoomClient() {
       }
     }
 
+    // ── Round state helpers ───────────────────────────────────────────────────
+
+    const postRoundState = (agentId: string, state: "PENDING" | "THINKING" | "RESPONDED" | "SKIPPED", round: number) => {
+      fetch(`${API}/rooms/${roomId}/round-state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ round, agent_id: agentId, state }),
+      }).catch(() => {});
+    };
+
+    const setDisplayState = (agentId: string, ds: AgentDisplayState) => {
+      setAgentDisplayStates((prev) => ({ ...prev, [agentId]: ds }));
+    };
+
+    const markThinking = (agent: GraphNode, round: number) => {
+      setDisplayState(agent.id, "thinking");
+      setCurrentSpeaker({ name: agent.label, round: `Round ${round}` });
+      postRoundState(agent.id, "THINKING", round);
+    };
+
+    const markDone = (agent: GraphNode, result: Message | null, round: number) => {
+      const ds: AgentDisplayState = result ? "responded" : "skipped";
+      setDisplayState(agent.id, ds);
+      setCurrentSpeaker(null);
+      postRoundState(agent.id, result ? "RESPONDED" : "SKIPPED", round);
+    };
+
+    const resetRound = (agentList: GraphNode[], round: number) => {
+      setAgentDisplayStates((prev) => {
+        const next = { ...prev };
+        for (const a of agentList) next[a.id] = "idle";
+        return next;
+      });
+      for (const a of agentList) postRoundState(a.id, "PENDING", round);
+    };
+
     // ── ROUND 1: Independent analysis (parallel) ──────────────────────────────
     addSystemMsg("Round 1 — Independent analysis");
+    resetRound(agents, 1);
     const r1Prompt =
       `${humanText}\n\nRound 1: Provide your independent expert analysis. Do not hold back your perspective.`;
     const r1Results = await Promise.all(
-      agents.map((agent) => callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages, "R1"), "R1")),
+      agents.map(async (agent) => {
+        markThinking(agent, 1);
+        const msg = await callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages, "R1"), "R1");
+        markDone(agent, msg, 1);
+        return msg;
+      }),
     );
     const r1Messages = r1Results.filter((m): m is Message => m !== null);
     roundsCompletedRef.current = 1;
@@ -1004,16 +1236,19 @@ export default function SessionRoomClient() {
     // ── ROUNDS 2 through maxRounds-1: Cross-review (sequential) ──────────────
     for (let round = 2; round < maxRounds; round++) {
       addSystemMsg(`Round ${round} — Cross-review`);
+      resetRound(agents, round);
       const roundPrompt =
         `Round ${round}: You have read your colleagues' analyses. Identify where you agree, where you disagree, and refine your position. Be specific about what you accept or challenge from others.`;
       const roundMsgs: Message[] = [];
       for (const agent of agents) {
+        markThinking(agent, round);
         const msg = await callAgent(
           agent,
           roundPrompt,
           getVisibleContext(agent, [...allMessages, ...roundMsgs], `R${round}`),
           "R2",
         );
+        markDone(agent, msg, round);
         if (msg) roundMsgs.push(msg);
       }
       roundsCompletedRef.current = round;
@@ -1023,10 +1258,12 @@ export default function SessionRoomClient() {
 
     // ── Final round: Consensus and deliverable (sequential, builders only) ────
     addSystemMsg(`Round ${maxRounds} — Consensus and deliverable`);
+    resetRound(finalRoundAgents, maxRounds);
     const finalPrompt =
       `Round ${maxRounds} (final): Based on all previous discussion, contribute your section to the unified team deliverable. The last agent should synthesize everything into one cohesive document.`;
     for (let i = 0; i < finalRoundAgents.length; i++) {
       const agent = finalRoundAgents[i];
+      markThinking(agent, maxRounds);
       const isLast = i === finalRoundAgents.length - 1;
       const prompt = isLast
         ? `${finalPrompt} You are the last agent — synthesize all contributions into one cohesive final document.`
@@ -1037,9 +1274,101 @@ export default function SessionRoomClient() {
         getVisibleContext(agent, allMessages, `R${maxRounds}`),
         isLast ? "DELIVERABLE" : "R3",
       );
+      markDone(agent, msg, maxRounds);
       if (msg) allMessages = [...allMessages, msg];
     }
     roundsCompletedRef.current = maxRounds;
+  }
+
+  // ── Poll helpers ─────────────────────────────────────────────────────────
+
+  async function handleHumanVote(pollId: string, optionIndex: number) {
+    setHumanVotedPollIds((prev) => new Set([...prev, pollId]));
+    await fetch(`${API}/rooms/${roomId}/polls/${pollId}/vote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voter_id: "human", voter_type: "human", option_index: optionIndex }),
+    }).catch(() => {});
+  }
+
+  async function handleVetoPoll(pollId: string) {
+    await fetch(`${API}/rooms/${roomId}/polls/${pollId}/veto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requester_id: "human" }),
+    }).catch(() => {});
+  }
+
+  function triggerAgentAutoVote(poll: PollType) {
+    const eligibleAgents = graphNodesRef.current.filter((n) => {
+      if (n.isHuman || n.role === "Observer") return false;
+      if (poll.scope === "CONTRIBUTORS_ONLY" && n.role !== "Contributor" && !n.isBuilder) return false;
+      if (poll.scope === "REVIEWERS_ONLY" && n.role !== "Reviewer") return false;
+      return true;
+    });
+
+    const optionsList = poll.options.map((o, i) => `${i}: ${o}`).join(", ");
+    const votePrompt =
+      `A poll has been proposed in this session:\n\nQuestion: ${poll.question}\nOptions: ${optionsList}\n\n` +
+      `Reply with ONLY the number of the option you choose (0, 1, 2, or 3). No other text.`;
+
+    eligibleAgents.forEach((agent) => {
+      const agentIdToSend = isUUID(agent.id) ? agent.id : toDemoSlug(agent.label);
+      fetch(`${API}/agents/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: roomId,
+          message: votePrompt,
+          agent_id: agentIdToSend,
+          acting_as: { name: agent.label, role: agent.role },
+          session_messages: [],
+        }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          const raw: string = (data.response ?? data.message ?? data.content ?? "").trim();
+          const idx = parseInt(raw.match(/\d/)?.[0] ?? "-1", 10);
+          if (idx >= 0 && idx < poll.options.length) {
+            fetch(`${API}/rooms/${roomId}/polls/${poll.poll_id}/vote`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ voter_id: agent.id, voter_type: "agent", option_index: idx }),
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    });
+  }
+
+  async function submitProposePoll() {
+    const validOptions = pollOptions.filter((o) => o.trim());
+    if (!pollQuestion.trim() || validOptions.length < 2) return;
+    setPollSubmitting(true);
+    try {
+      await fetch(`${API}/rooms/${roomId}/polls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposed_by: "human",
+          proposed_by_type: "human",
+          question: pollQuestion.trim(),
+          options: validOptions,
+          deadline_secs: pollDeadline,
+          scope: pollScope,
+          action_type: pollActionType || null,
+          action_params: null,
+        }),
+      });
+      setShowProposePoll(false);
+      setPollQuestion("");
+      setPollOptions(["", ""]);
+      setPollScope("ALL");
+      setPollActionType("CONSENSUS");
+      setPollDeadline(120);
+    } finally {
+      setPollSubmitting(false);
+    }
   }
 
   // ── Send human message ────────────────────────────────────────────────────
@@ -1111,7 +1440,7 @@ export default function SessionRoomClient() {
     setFailedAgent(null);
     setStatus("CLOSED_DISPUTED");
     setOutcome("INCOMPLETE");
-    setShowModal(true);
+    setShowFeedbackModal(true);
   }
 
   function handleCancelSession() {
@@ -1119,7 +1448,7 @@ export default function SessionRoomClient() {
       setMessages((prev) => [...prev, systemMsg("Session cancelled by Requester")]);
       setStatus("CLOSED_DISPUTED");
       setOutcome("CANCELLED");
-      setShowModal(true);
+      setShowFeedbackModal(true);
       setShowCancelConfirm(false);
       return;
     }
@@ -1144,7 +1473,7 @@ export default function SessionRoomClient() {
     setMessages((prev) => [...prev, systemMsg("Session cancelled by Requester")]);
     setStatus("CLOSED_DISPUTED");
     setOutcome("CANCELLED");
-    setShowModal(true);
+    setShowFeedbackModal(true);
     setShowCancelConfirm(false);
   }
 
@@ -1262,7 +1591,7 @@ export default function SessionRoomClient() {
         if (backendStatus === "DISPUTED" || backendOutcome === "DISPUTE") {
           setStatus("CLOSED_DISPUTED");
           setOutcome("DISPUTED");
-          setShowModal(true);
+          setShowFeedbackModal(true);
           return;
         }
         if (backendStatus === "REVISION") {
@@ -1288,7 +1617,7 @@ export default function SessionRoomClient() {
       } else {
         setStatus("CLOSED_DISPUTED");
         setOutcome("DISPUTED");
-        setShowModal(true);
+        setShowFeedbackModal(true);
       }
     } catch {
       // Network error — apply locally
@@ -1300,11 +1629,36 @@ export default function SessionRoomClient() {
       } else {
         setStatus("CLOSED_DISPUTED");
         setOutcome("DISPUTED");
-        setShowModal(true);
+        setShowFeedbackModal(true);
       }
     } finally {
       setVerdictLoading(false);
     }
+  }
+
+  async function submitFailureFeedback() {
+    if (!fbReason || fbText.trim().length < 20 || fbRetry === null) return;
+    setFbSubmitting(true);
+    try {
+      await fetch(`${API}/dataset/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          session_id: roomId,
+          failure_reason: fbReason,
+          failure_free_text: fbText.trim(),
+          problematic_agent_ids: fbAgents,
+          would_retry: fbRetry,
+        }),
+      }).catch(() => {});
+    } finally {
+      setFbSubmitting(false);
+    }
+    setShowFeedbackModal(false);
+    setShowModal(true);
   }
 
   function downloadLog() {
@@ -1385,10 +1739,11 @@ export default function SessionRoomClient() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isClosed      = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
-  const step          = STATUS_STEP[status];
-  const agentNodes    = graphNodes.filter((n) => !n.isHuman);
-  const deliverableExt = detectFormat(taskDescription);
+  const isClosed         = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
+  const step             = STATUS_STEP[status];
+  const agentNodes       = graphNodes.filter((n) => !n.isHuman);
+  const deliverableExt   = detectFormat(taskDescription);
+  const isHumanInSession = graphNodes.some((n) => n.isHuman);
 
   // Build nodeId → cluster lookup for team badges and tab filtering
   const clusterByNodeId = new Map<string, GraphCluster>(
@@ -1536,6 +1891,16 @@ export default function SessionRoomClient() {
             </div>
           )}
 
+          {/* Currently speaking indicator */}
+          {currentSpeaker && (
+            <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-al-accent/5 border-b border-al-border">
+              <span className="w-1.5 h-1.5 rounded-full bg-al-accent animate-pulse shrink-0" />
+              <span className="text-xs text-al-muted">{currentSpeaker.round} ·</span>
+              <span className="text-xs font-semibold text-al-accent">{currentSpeaker.name}</span>
+              <span className="text-xs text-al-muted">is thinking…</span>
+            </div>
+          )}
+
           {/* Team tabs — only shown when clusters exist */}
           {graphClusters.length > 0 && (
             <div className="shrink-0 flex items-center border-b border-al-border bg-al-surface px-2 overflow-x-auto">
@@ -1596,16 +1961,36 @@ export default function SessionRoomClient() {
                 <p className="text-xs mt-1">Send a message to start the session</p>
               </div>
             )}
-            {visibleMessages.map((msg) => (
-              <MessageBubble
-                key={msg.id}
-                msg={msg}
-                roomId={roomId}
-                cluster={clusterByNodeId.get(msg.agentId)}
-                deliverableExt={deliverableExt}
-                onDownloadDeliverable={msg.type === "DELIVERABLE" ? downloadDeliverable : undefined}
-              />
-            ))}
+            {visibleMessages.map((msg) => {
+              if (msg.type === "POLL_EVENT") {
+                const pollId = (msg.contentStructured?.poll_id ?? "") as string;
+                const livePoll = polls.find((p) => p.poll_id === pollId);
+                if (!livePoll) return null;
+                const proposerNode = graphNodes.find((n) => n.id === livePoll.proposed_by);
+                return (
+                  <PollCard
+                    key={msg.id}
+                    poll={livePoll}
+                    isHuman={isHumanInSession}
+                    isRequester={isHumanInSession}
+                    hasVoted={humanVotedPollIds.has(livePoll.poll_id)}
+                    onVote={handleHumanVote}
+                    onVeto={handleVetoPoll}
+                    proposerName={proposerNode?.label ?? (livePoll.proposed_by_type === "human" ? "Human" : livePoll.proposed_by)}
+                  />
+                );
+              }
+              return (
+                <MessageBubble
+                  key={msg.id}
+                  msg={msg}
+                  roomId={roomId}
+                  cluster={clusterByNodeId.get(msg.agentId)}
+                  deliverableExt={deliverableExt}
+                  onDownloadDeliverable={msg.type === "DELIVERABLE" ? downloadDeliverable : undefined}
+                />
+              );
+            })}
             <div ref={messagesEndRef} />
           </div>
 
@@ -1661,7 +2046,7 @@ export default function SessionRoomClient() {
           <div className="shrink-0 border-t border-al-border bg-al-surface px-4 py-3 space-y-3">
             <ProgressBar step={step} status={status} />
 
-            {/* Session controls: pause + cancel */}
+            {/* Session controls: pause + cancel + propose poll */}
             {!isClosed && (
               <div className="flex items-center gap-2">
                 <button
@@ -1674,6 +2059,18 @@ export default function SessionRoomClient() {
                   }}
                 >
                   {isPaused ? "▶ Resume" : "⏸ Pause"}
+                </button>
+                <button
+                  onClick={() => setShowProposePoll(true)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    background: "rgba(168,85,247,0.08)",
+                    border: "1px solid rgba(168,85,247,0.25)",
+                    color: "#A855F7",
+                  }}
+                  title="Propose a poll"
+                >
+                  📊 Poll
                 </button>
                 {showCancelConfirm ? (
                   <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/5 border border-red-500/30">
@@ -1749,6 +2146,233 @@ export default function SessionRoomClient() {
       </div>
 
       {/* Agent failure modal */}
+      {/* Mandatory failure feedback modal — cannot be dismissed */}
+      {showFeedbackModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-5">
+            <div className="space-y-1">
+              <h2 className="text-base font-semibold text-al-text">
+                Before you go — help us improve
+              </h2>
+              <p className="text-xs text-al-muted">
+                This session ended without a successful deliverable. Your feedback improves future team recommendations.
+              </p>
+            </div>
+
+            {/* What went wrong */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">
+                What went wrong? <span className="text-red-400">*</span>
+              </label>
+              <textarea
+                value={fbText}
+                onChange={(e) => setFbText(e.target.value)}
+                placeholder="Describe what happened in this session…"
+                rows={3}
+                className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors resize-none"
+              />
+              <p className={`text-[10px] text-right ${fbText.trim().length >= 20 ? "text-green-400" : "text-al-muted"}`}>
+                {fbText.trim().length} / 20 min chars
+              </p>
+            </div>
+
+            {/* Main reason */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">
+                Main reason for failure <span className="text-red-400">*</span>
+              </label>
+              <select
+                value={fbReason}
+                onChange={(e) => setFbReason(e.target.value)}
+                className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-2 text-sm text-al-text focus:outline-none focus:border-al-accent transition-colors"
+              >
+                <option value="">Select a reason…</option>
+                <option value="AGENT_DID_NOT_UNDERSTAND">Agent did not understand the task</option>
+                <option value="AGENT_QUALITY_TOO_LOW">Agent quality was too low</option>
+                <option value="SESSION_TOO_LONG">Session took too long</option>
+                <option value="TECHNICAL_FAILURE">Technical failure (agent down / timeout)</option>
+                <option value="TASK_TOO_COMPLEX">Task was too complex for the team</option>
+                <option value="REQUESTER_CHANGED_MIND">I changed my mind / task no longer needed</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+
+            {/* Problematic agents */}
+            {agentNodes.length > 0 && (
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">
+                  Which agent(s) were the problem? <span className="text-al-muted font-normal">(optional)</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {agentNodes.map((n) => (
+                    <label key={n.id} className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={fbAgents.includes(n.id)}
+                        onChange={(e) =>
+                          setFbAgents((prev) =>
+                            e.target.checked ? [...prev, n.id] : prev.filter((id) => id !== n.id)
+                          )
+                        }
+                        className="accent-al-accent"
+                      />
+                      <span className="text-xs text-al-text">{n.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Would retry */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">
+                Would you try again with a different team? <span className="text-red-400">*</span>
+              </label>
+              <div className="flex gap-3">
+                {([true, false] as const).map((val) => (
+                  <button
+                    key={String(val)}
+                    onClick={() => setFbRetry(val)}
+                    className={`flex-1 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                      fbRetry === val
+                        ? "bg-al-accent/15 border-al-accent text-al-accent"
+                        : "bg-transparent border-al-border text-al-muted hover:border-al-accent/50"
+                    }`}
+                  >
+                    {val ? "Yes" : "No"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={submitFailureFeedback}
+              disabled={
+                fbSubmitting ||
+                fbText.trim().length < 20 ||
+                !fbReason ||
+                fbRetry === null
+              }
+              className="w-full py-2.5 rounded-xl bg-al-accent text-al-bg text-sm font-semibold hover:bg-al-accent-dim active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {fbSubmitting ? "Submitting…" : "Submit feedback & close session"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Propose Poll modal */}
+      {showProposePoll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-al-text">Propose a Poll</h2>
+              <button onClick={() => setShowProposePoll(false)} className="text-al-muted hover:text-al-text transition-colors text-lg leading-none">×</button>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">Question</label>
+              <input
+                type="text"
+                value={pollQuestion}
+                onChange={(e) => setPollQuestion(e.target.value)}
+                placeholder="What should the team decide?"
+                className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">Options</label>
+              {pollOptions.map((opt, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={opt}
+                    onChange={(e) => { const o = [...pollOptions]; o[i] = e.target.value; setPollOptions(o); }}
+                    placeholder={`Option ${i + 1}`}
+                    className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                  />
+                  {pollOptions.length > 2 && (
+                    <button onClick={() => setPollOptions(pollOptions.filter((_, j) => j !== i))} className="text-al-muted hover:text-red-400 transition-colors text-sm">✕</button>
+                  )}
+                </div>
+              ))}
+              {pollOptions.length < 4 && (
+                <button
+                  onClick={() => setPollOptions([...pollOptions, ""])}
+                  className="text-xs text-al-accent hover:text-al-accent/70 transition-colors"
+                >
+                  + Add option
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">Scope</label>
+                <select
+                  value={pollScope}
+                  onChange={(e) => setPollScope(e.target.value as typeof pollScope)}
+                  className="w-full bg-al-bg border border-al-border rounded-lg px-2 py-1.5 text-xs text-al-text focus:outline-none focus:border-al-accent transition-colors"
+                >
+                  <option value="ALL">All agents</option>
+                  <option value="CONTRIBUTORS_ONLY">Contributors only</option>
+                  <option value="REVIEWERS_ONLY">Reviewers only</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">Action</label>
+                <select
+                  value={pollActionType}
+                  onChange={(e) => setPollActionType(e.target.value)}
+                  className="w-full bg-al-bg border border-al-border rounded-lg px-2 py-1.5 text-xs text-al-text focus:outline-none focus:border-al-accent transition-colors"
+                >
+                  <option value="CONSENSUS">Consensus only</option>
+                  <option value="OPEN_ROUND">Open extra round</option>
+                  <option value="SKIP_AGENT">Skip an agent</option>
+                  <option value="REASSIGN_BUILDER">Reassign builder</option>
+                  <option value="CUSTOM_MESSAGE">Custom message</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] text-al-muted uppercase tracking-wide font-semibold">
+                Deadline — {pollDeadline}s
+              </label>
+              <input
+                type="range"
+                min={30}
+                max={300}
+                step={15}
+                value={pollDeadline}
+                onChange={(e) => setPollDeadline(Number(e.target.value))}
+                className="w-full accent-al-accent"
+              />
+              <div className="flex justify-between text-[10px] text-al-muted">
+                <span>30s</span><span>5m</span>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={() => setShowProposePoll(false)}
+                className="flex-1 px-4 py-2 rounded-xl border border-al-border text-al-muted text-sm hover:text-al-text transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitProposePoll}
+                disabled={pollSubmitting || !pollQuestion.trim() || pollOptions.filter((o) => o.trim()).length < 2}
+                className="flex-1 px-4 py-2 rounded-xl bg-[#A855F7] text-white text-sm font-semibold hover:bg-[#9333EA] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pollSubmitting ? "Creating…" : "Create Poll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showFailureModal && failedAgent && (
         <AgentFailureModal
           agentName={failedAgent.name}
@@ -1788,7 +2412,11 @@ export default function SessionRoomClient() {
           deliverable={deliverableMsg}
           deliverableExt={deliverableExt}
           reputationUpdates={reputationUpdates}
+          githubConnected={!!user?.github_username}
+          githubPushing={githubPushing}
+          githubDeliveryUrl={githubDeliveryUrl}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
+          onPushGitHub={deliverableMsg && outcome === "SUCCESS" ? pushToGitHub : undefined}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
         />
@@ -2382,7 +3010,11 @@ function CloseModal({
   deliverable,
   deliverableExt = "md",
   reputationUpdates,
+  githubConnected,
+  githubPushing,
+  githubDeliveryUrl,
   onDownloadDeliverable,
+  onPushGitHub,
   onDownload,
   onClose,
 }: {
@@ -2399,7 +3031,11 @@ function CloseModal({
   deliverable?: Message | null;
   deliverableExt?: string;
   reputationUpdates?: Record<string, ReputationUpdate> | null;
+  githubConnected?: boolean;
+  githubPushing?: boolean;
+  githubDeliveryUrl?: string | null;
   onDownloadDeliverable?: (msg: Message) => void;
+  onPushGitHub?: () => void;
   onDownload: () => void;
   onClose: () => void;
 }) {
@@ -2601,6 +3237,46 @@ function CloseModal({
               </svg>
               Download Deliverable (.{deliverableExt})
             </button>
+          )}
+          {onPushGitHub && (
+            githubDeliveryUrl ? (
+              <a
+                href={githubDeliveryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+                style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.45)", color: "#22C55E" }}
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+                Pushed to GitHub — View Branch
+              </a>
+            ) : (
+              <button
+                onClick={onPushGitHub}
+                disabled={githubPushing}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
+              >
+                {githubPushing ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
+                  </svg>
+                )}
+                {githubPushing ? "Pushing to GitHub…" : "Push to GitHub"}
+              </button>
+            )
+          )}
+          {!onPushGitHub && !githubConnected && outcome === "SUCCESS" && deliverable && (
+            <p className="text-center text-xs text-al-muted py-1">
+              Connect GitHub in your profile to push deliverables
+            </p>
           )}
           <div className="flex gap-3">
             <button

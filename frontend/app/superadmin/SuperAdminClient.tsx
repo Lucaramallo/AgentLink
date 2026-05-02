@@ -16,8 +16,21 @@ import {
   type AdminUser,
   type GlobalStats,
 } from "../lib/api";
+import { API_BASE } from "../lib/api";
 
-type Tab = "stats" | "agents" | "users" | "sessions" | "moderation";
+type Tab = "stats" | "agents" | "users" | "sessions" | "moderation" | "dataset";
+
+interface DatasetSession {
+  dataset_id: string; session_id: string; final_outcome: string;
+  task_keywords: string[]; number_of_agents: number; number_of_rounds_used: number;
+  human_team_rating: number | null; average_peer_rating: number | null;
+  failure_reason: string | null; recorded_at: string;
+}
+interface DatasetFeedback {
+  feedback_id: string; session_id: string; failure_reason: string;
+  failure_free_text: string; would_retry: boolean; problematic_agent_ids: string[];
+  created_at: string;
+}
 
 function agentStatusLabel(a: AdminAgent): { label: string; color: string } {
   if (a.frozen) return { label: "Frozen", color: "#F59E0B" };
@@ -57,6 +70,14 @@ export default function SuperAdminClient() {
   const [selectedSession, setSelectedSession] = useState<AdminSession | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
+  // Dataset tab state
+  const [datasetSub, setDatasetSub] = useState<"sessions" | "feedback" | "export">("sessions");
+  const [datasetSessions, setDatasetSessions] = useState<DatasetSession[]>([]);
+  const [datasetFeedback, setDatasetFeedback] = useState<DatasetFeedback[]>([]);
+  const [datasetLoading, setDatasetLoading] = useState(false);
+  const [datasetOutcomeFilter, setDatasetOutcomeFilter] = useState("");
+  const [expandedFeedback, setExpandedFeedback] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (authLoading) return;
     if (!isAuthenticated) { router.push("/login"); return; }
@@ -91,6 +112,33 @@ export default function SuperAdminClient() {
     }
   }
 
+  async function fetchDataset() {
+    setDatasetLoading(true);
+    try {
+      const hdrs: HeadersInit = { "Content-Type": "application/json" };
+      const [sRes, fRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/dataset/sessions?limit=200${datasetOutcomeFilter ? `&outcome=${datasetOutcomeFilter}` : ""}`, { headers: hdrs, credentials: "include" }),
+        fetch(`${API_BASE}/api/v1/dataset/feedback?limit=200`, { headers: hdrs, credentials: "include" }),
+      ]);
+      if (sRes.ok) setDatasetSessions((await sRes.json()).sessions ?? []);
+      if (fRes.ok) setDatasetFeedback((await fRes.json()).feedback ?? []);
+    } finally {
+      setDatasetLoading(false);
+    }
+  }
+
+  async function downloadDatasetExport() {
+    const res = await fetch(`${API_BASE}/api/v1/dataset/export`, { credentials: "include" });
+    if (!res.ok) return;
+    const blob = new Blob([JSON.stringify(await res.json(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `agentlink_dataset_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const filteredAgents = agents.filter(a => {
     const matchSearch = !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase()) || a.framework.toLowerCase().includes(agentSearch.toLowerCase());
     const matchFilter =
@@ -110,7 +158,12 @@ export default function SuperAdminClient() {
     { id: "users", label: "All Users", icon: "👤" },
     { id: "sessions", label: "Session Logs", icon: "📋" },
     { id: "moderation", label: "Moderation", icon: "🛡️", badge: disputedSessions.length + frozenAgents.length },
+    { id: "dataset", label: "Dataset", icon: "🧬" },
   ];
+
+  useEffect(() => {
+    if (tab === "dataset") fetchDataset();
+  }, [tab, datasetOutcomeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (authLoading || loading) {
     return (
@@ -527,6 +580,171 @@ export default function SuperAdminClient() {
             {disputedSessions.length === 0 && frozenAgents.length === 0 && (
               <div style={{ textAlign: "center", color: "#64748B", padding: "60px 0", fontSize: 14 }}>
                 ✓ No items require moderation.
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === "dataset" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+              <h1 style={{ fontSize: 22, fontWeight: 700 }}>🧬 Collaborative Behavior Dataset</h1>
+              {datasetLoading && <span style={{ fontSize: 12, color: "#64748B" }}>Loading…</span>}
+            </div>
+
+            {/* Sub-tab bar */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid #1E2D4A" }}>
+              {(["sessions", "feedback", "export"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setDatasetSub(s)}
+                  style={{
+                    padding: "8px 18px", border: "none", borderBottom: `2px solid ${datasetSub === s ? "#4ECDC4" : "transparent"}`,
+                    background: "transparent", color: datasetSub === s ? "#4ECDC4" : "#64748B",
+                    fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize",
+                  }}
+                >
+                  {s === "sessions" ? `Sessions (${datasetSessions.length})` : s === "feedback" ? `Feedback (${datasetFeedback.length})` : "Export"}
+                </button>
+              ))}
+            </div>
+
+            {/* Sessions sub-tab */}
+            {datasetSub === "sessions" && (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                  <span style={{ fontSize: 12, color: "#64748B" }}>Filter by outcome:</span>
+                  <select
+                    value={datasetOutcomeFilter}
+                    onChange={(e) => setDatasetOutcomeFilter(e.target.value)}
+                    style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, color: "#E2E8F0", padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
+                  >
+                    <option value="">All outcomes</option>
+                    {["CONFORME", "NO_CONFORME", "CANCELLED", "INCOMPLETE", "DISPUTED"].map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                </div>
+                {datasetSessions.length === 0 ? (
+                  <div style={{ textAlign: "center", color: "#64748B", padding: "48px 0", fontSize: 14 }}>No dataset sessions recorded yet.</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #1E2D4A", color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 11 }}>
+                          {["Session", "Keywords", "Agents", "Rounds", "Outcome", "Human Rating", "Peer Rating", "Failure Reason", "Recorded"].map((h) => (
+                            <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {datasetSessions.map((s) => {
+                          const outcomeColor: Record<string, string> = {
+                            CONFORME: "#22C55E", NO_CONFORME: "#EF4444", CANCELLED: "#F59E0B",
+                            INCOMPLETE: "#6366F1", DISPUTED: "#EF4444",
+                          };
+                          return (
+                            <tr key={s.dataset_id} style={{ borderBottom: "1px solid #1E2D4A" }}>
+                              <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94A3B8" }}>{s.session_id.slice(0, 8)}</td>
+                              <td style={{ padding: "10px 12px" }}>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                  {(s.task_keywords ?? []).slice(0, 5).map((k) => (
+                                    <span key={k} style={{ background: "rgba(78,205,196,0.1)", color: "#4ECDC4", border: "1px solid rgba(78,205,196,0.3)", borderRadius: 4, padding: "1px 6px", fontSize: 10 }}>{k}</span>
+                                  ))}
+                                  {(s.task_keywords ?? []).length === 0 && <span style={{ color: "#475569" }}>—</span>}
+                                </div>
+                              </td>
+                              <td style={{ padding: "10px 12px", textAlign: "center" }}>{s.number_of_agents}</td>
+                              <td style={{ padding: "10px 12px", textAlign: "center" }}>{s.number_of_rounds_used}</td>
+                              <td style={{ padding: "10px 12px" }}>
+                                <span style={{ background: `${outcomeColor[s.final_outcome] ?? "#64748B"}22`, color: outcomeColor[s.final_outcome] ?? "#64748B", border: `1px solid ${outcomeColor[s.final_outcome] ?? "#64748B"}44`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
+                                  {s.final_outcome}
+                                </span>
+                              </td>
+                              <td style={{ padding: "10px 12px", textAlign: "center" }}>{s.human_team_rating != null ? `${s.human_team_rating} ★` : "—"}</td>
+                              <td style={{ padding: "10px 12px", textAlign: "center" }}>{s.average_peer_rating != null ? `${s.average_peer_rating.toFixed(1)} ★` : "—"}</td>
+                              <td style={{ padding: "10px 12px", color: "#94A3B8", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {s.failure_reason ? s.failure_reason.replace(/_/g, " ").toLowerCase() : "—"}
+                              </td>
+                              <td style={{ padding: "10px 12px", color: "#64748B" }}>{fmtDate(s.recorded_at)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Feedback sub-tab */}
+            {datasetSub === "feedback" && (
+              <div>
+                {datasetFeedback.length === 0 ? (
+                  <div style={{ textAlign: "center", color: "#64748B", padding: "48px 0", fontSize: 14 }}>No failure feedback submitted yet.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {datasetFeedback.map((fb) => (
+                      <div key={fb.feedback_id} style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 12, padding: "16px 20px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                            <span style={{ fontFamily: "monospace", color: "#64748B", fontSize: 11 }}>{fb.session_id.slice(0, 8)}</span>
+                            <span style={{ background: "rgba(239,68,68,0.1)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
+                              {fb.failure_reason.replace(/_/g, " ").toLowerCase()}
+                            </span>
+                            <span style={{ background: fb.would_retry ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: fb.would_retry ? "#22C55E" : "#EF4444", border: `1px solid ${fb.would_retry ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
+                              {fb.would_retry ? "Would retry" : "Would not retry"}
+                            </span>
+                            {fb.problematic_agent_ids.length > 0 && (
+                              <span style={{ color: "#94A3B8", fontSize: 11 }}>{fb.problematic_agent_ids.length} agent{fb.problematic_agent_ids.length !== 1 ? "s" : ""} flagged</span>
+                            )}
+                          </div>
+                          <span style={{ color: "#475569", fontSize: 11 }}>{fmtDate(fb.created_at)}</span>
+                        </div>
+                        <div style={{ color: "#94A3B8", fontSize: 12, lineHeight: 1.5 }}>
+                          {expandedFeedback.has(fb.feedback_id)
+                            ? fb.failure_free_text
+                            : `${fb.failure_free_text.slice(0, 80)}${fb.failure_free_text.length > 80 ? "…" : ""}`}
+                          {fb.failure_free_text.length > 80 && (
+                            <button
+                              onClick={() => setExpandedFeedback((prev) => {
+                                const next = new Set(prev);
+                                next.has(fb.feedback_id) ? next.delete(fb.feedback_id) : next.add(fb.feedback_id);
+                                return next;
+                              })}
+                              style={{ background: "none", border: "none", color: "#4ECDC4", cursor: "pointer", fontSize: 11, marginLeft: 6 }}
+                            >
+                              {expandedFeedback.has(fb.feedback_id) ? "show less" : "show more"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Export sub-tab */}
+            {datasetSub === "export" && (
+              <div style={{ maxWidth: 480 }}>
+                <div style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 16, padding: "32px 36px", textAlign: "center" }}>
+                  <div style={{ fontSize: 40, marginBottom: 16 }}>🧬</div>
+                  <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>Full Dataset Export</h3>
+                  <p style={{ color: "#64748B", fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>
+                    Downloads all session metrics, per-agent performance data, and failure feedback as a structured JSON file. Used for training team recommendation models.
+                  </p>
+                  <div style={{ display: "flex", gap: 12, justifyContent: "center", marginBottom: 16, fontSize: 12, color: "#64748B" }}>
+                    <span>📁 {datasetSessions.length} sessions</span>
+                    <span>📝 {datasetFeedback.length} feedback entries</span>
+                  </div>
+                  <button
+                    onClick={downloadDatasetExport}
+                    style={{ background: "rgba(78,205,196,0.1)", border: "1px solid rgba(78,205,196,0.4)", color: "#4ECDC4", padding: "12px 32px", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                  >
+                    ⬇ Download Full Dataset JSON
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     frontend_url: str = "http://192.168.0.121:3001"
     # GitHub REST API base URL
     github_api_url: str = "https://api.github.com"
+    # Server-side ed25519 signing key (base64) — used to sign human-proposed polls
+    # Generate with: python3 -c "import nacl.signing, base64; k=nacl.signing.SigningKey.generate(); print(base64.b64encode(bytes(k)).decode())"
+    server_signing_key: str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 
 settings = Settings()

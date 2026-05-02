@@ -6,16 +6,47 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.config import settings
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.agent import Agent
-from app.models.room import Message, MessageType, Room, RoomContract, RoomOutcome, RoomStatus
+from app.models.room import (
+    Message,
+    MessageType,
+    Poll,
+    PollActionType,
+    PollScope,
+    Room,
+    RoomContract,
+    RoomOutcome,
+    RoomStatus,
+)
+from app.models.user import User
+from app.services.github_delivery import deliver_to_github
 from app.services.identity import sign_message, verify_signature
 from app.services.room_manager import create_room, process_deliverable
+from app.services.round_state import (
+    get_round_state,
+    initialize_round,
+    mark_timed_out,
+    set_agent_state,
+)
+from app.services.turn_order import get_turn_order
+from app.services.poll_service import (
+    apply_result,
+    cast_vote,
+    close_poll,
+    create_poll,
+    serialize_poll,
+    sign_poll_server,
+    veto_poll,
+)
 from app.websocket.room_handler import room_manager
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
@@ -214,6 +245,12 @@ async def submit_verdict(
         raise HTTPException(status_code=400, detail="Veredicto debe ser CONFORME o NO_CONFORME.")
 
     room = await process_deliverable(db, room, payload.verdict, payload.reason)
+
+    if payload.verdict == "CONFORME":
+        from app.services.dataset_service import collect_session_data as _collect
+        import asyncio as _asyncio
+        _asyncio.create_task(_collect(db=db, room_id=room_id, outcome="CONFORME"))
+
     return {"room_id": str(room.room_id), "status": room.status, "outcome": room.outcome}
 
 
@@ -287,6 +324,432 @@ async def agent_dropped(
         }
 
     raise HTTPException(status_code=400, detail="action must be 'continue_without' or 'close_session'.")
+
+
+# --- GitHub Delivery ---
+
+class DeliverGitHubPayload(BaseModel):
+    deliverable_content: str
+    session_log: str
+    agents_contributions: list[dict]
+    github_repo_url: str | None = None
+
+
+@router.post("/{room_id}/deliver-github")
+async def deliver_github(
+    room_id: uuid.UUID,
+    payload: DeliverGitHubPayload,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Push session deliverable to GitHub. Room must be CLOSED+SUCCESS if it exists in DB."""
+    if not current_user.github_access_token:
+        raise HTTPException(status_code=400, detail="GitHub account not connected.")
+
+    room = await db.get(Room, room_id)
+    if room and not (room.status == RoomStatus.CLOSED and room.outcome == RoomOutcome.SUCCESS):
+        raise HTTPException(status_code=400, detail="Room must be CLOSED with SUCCESS outcome.")
+
+    existing_repo_url = payload.github_repo_url or (room.github_repo_url if room else None)
+
+    try:
+        result = await deliver_to_github(
+            github_access_token=current_user.github_access_token,
+            github_username=current_user.github_username or "",
+            room_id=room_id,
+            deliverable_content=payload.deliverable_content,
+            session_log=payload.session_log,
+            agents_contributions=payload.agents_contributions,
+            existing_repo_url=existing_repo_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub delivery failed: {exc}")
+
+    if room:
+        room.github_delivery_url = result["branch_url"]
+        await db.flush()
+
+    return result
+
+
+# --- Turn order & round state ---
+
+def _redis() -> Redis:
+    return Redis.from_url(settings.redis_url, decode_responses=True)
+
+
+class SessionGraphPayload(BaseModel):
+    agents: list[dict]
+    edges: list[dict]
+    thinking_timeout_secs: int = 60
+
+
+class RoundStateUpdate(BaseModel):
+    round: int
+    agent_id: str
+    state: str  # PENDING | THINKING | RESPONDED | SKIPPED
+
+
+@router.post("/{room_id}/session-graph")
+async def set_session_graph(
+    room_id: uuid.UUID,
+    payload: SessionGraphPayload,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Persist the session graph (agents + edges) used for turn order and edge validation."""
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+
+    room.session_graph = {"agents": payload.agents, "edges": payload.edges}
+    room.thinking_timeout_secs = max(10, min(300, payload.thinking_timeout_secs))
+    await db.flush()
+
+    non_human_ids = [a["id"] for a in payload.agents if not a.get("is_human", False)]
+    r = _redis()
+    try:
+        await initialize_round(r, str(room_id), 1, non_human_ids)
+    finally:
+        await r.aclose()
+
+    return {"ok": True, "agent_count": len(non_human_ids)}
+
+
+@router.get("/{room_id}/turn-order")
+async def get_room_turn_order(
+    room_id: uuid.UUID,
+    round: int,
+    max_rounds: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return ordered turn groups for the given round based on the stored session graph."""
+    room = await db.get(Room, room_id)
+    if not room or not room.session_graph:
+        raise HTTPException(status_code=404, detail="Session graph not set for this room.")
+
+    groups = get_turn_order(room.session_graph, round, max_rounds)
+    return {
+        "round": round,
+        "max_rounds": max_rounds,
+        "groups": [
+            {"agents": g.agents, "parallel": g.parallel, "label": g.label}
+            for g in groups
+        ],
+    }
+
+
+@router.get("/{room_id}/round-state")
+async def get_room_round_state(
+    room_id: uuid.UUID,
+    round: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return per-agent states for a round. Times out any stale THINKING agents first."""
+    room = await db.get(Room, room_id)
+    timeout_secs = room.thinking_timeout_secs if room else 60
+
+    r = _redis()
+    try:
+        timed_out = await mark_timed_out(r, str(room_id), round, timeout_secs)
+        states = await get_round_state(r, str(room_id), round)
+    finally:
+        await r.aclose()
+
+    return {"round": round, "states": states, "timed_out": timed_out}
+
+
+@router.post("/{room_id}/round-state")
+async def update_round_state(
+    room_id: uuid.UUID,
+    payload: RoundStateUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Update one agent's state in a round and broadcast agent_state_change over WS."""
+    valid = {"PENDING", "THINKING", "RESPONDED", "SKIPPED"}
+    if payload.state not in valid:
+        raise HTTPException(status_code=400, detail=f"state must be one of {sorted(valid)}.")
+
+    room = await db.get(Room, room_id)
+    timeout_secs = room.thinking_timeout_secs if room else 60
+
+    r = _redis()
+    try:
+        if payload.state == "THINKING":
+            await mark_timed_out(r, str(room_id), payload.round, timeout_secs)
+        await set_agent_state(r, str(room_id), payload.round, payload.agent_id, payload.state)
+    finally:
+        await r.aclose()
+
+    # Broadcast to all frontend connections in this room
+    from app.routers.websocket import manager as ws_manager
+    await ws_manager.broadcast(str(room_id), {
+        "type": "agent_state_change",
+        "data": {
+            "agent_id": payload.agent_id,
+            "state": payload.state,
+            "round": payload.round,
+        },
+    })
+
+    return {"ok": True}
+
+
+# --- Polls ---
+
+class PollCreate(BaseModel):
+    proposed_by: str  # agent UUID string or "human"
+    proposed_by_type: str  # "agent" | "human"
+    question: str
+    options: list[str]
+    deadline_secs: int = 120
+    scope: str = "ALL"
+    action_type: str | None = None
+    action_params: dict | None = None
+    signature: str | None = None  # required for agent proposals; omit for human (server signs)
+
+
+class PollVotePayload(BaseModel):
+    voter_id: str
+    voter_type: str  # "agent" | "human"
+    option_index: int
+
+
+class PollVetoPayload(BaseModel):
+    requester_id: str
+
+
+def _system_agent_id(room: Room) -> uuid.UUID:
+    """Return agent_a as the system signer for POLL_EVENT messages."""
+    return room.agent_a_id
+
+
+async def _insert_poll_event(
+    db: AsyncSession,
+    room: Room,
+    event_name: str,
+    poll_data: dict,
+) -> None:
+    """Insert an immutable POLL_EVENT system message into the session log."""
+    from app.services.identity import sign_message as _sign
+    content = f"[POLL_EVENT:{event_name}] {poll_data['question']}"
+    canonical = content
+    sig = _sign(settings.server_signing_key, canonical)
+    msg = Message(
+        room_id=room.room_id,
+        sender_agent_id=_system_agent_id(room),
+        content_natural=content,
+        content_structured={"event": event_name, "poll": poll_data},
+        signature=sig,
+        message_type=MessageType.POLL_EVENT,
+    )
+    db.add(msg)
+    await db.flush()
+
+
+@router.post("/{room_id}/polls", status_code=status.HTTP_201_CREATED)
+async def create_room_poll(
+    room_id: uuid.UUID,
+    payload: PollCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Create a new poll in the session. Agent polls require a valid ed25519 signature."""
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    if not room.session_graph:
+        raise HTTPException(status_code=400, detail="Session graph not set for this room.")
+
+    scope = PollScope(payload.scope)
+    action_type = PollActionType(payload.action_type) if payload.action_type else None
+
+    # For human proposals the server generates the signature
+    if payload.proposed_by_type == "human":
+        poll_id_tmp = uuid.uuid4()
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        sig = sign_poll_server(
+            str(poll_id_tmp), str(room_id), payload.proposed_by,
+            payload.question, payload.options, now_iso,
+        )
+        # We pass the pre-generated sig; create_poll will skip re-verification for humans
+        final_sig = sig
+    else:
+        if not payload.signature:
+            raise HTTPException(status_code=400, detail="Agent proposals require a signature.")
+        final_sig = payload.signature
+
+    try:
+        poll = await create_poll(
+            db=db,
+            room_id=room_id,
+            proposed_by=payload.proposed_by,
+            proposed_by_type=payload.proposed_by_type,
+            question=payload.question,
+            options=payload.options,
+            deadline_secs=payload.deadline_secs,
+            scope=scope,
+            action_type=action_type,
+            action_params=payload.action_params,
+            session_graph=room.session_graph,
+            signature=final_sig,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    poll_data = serialize_poll(poll)
+
+    await _insert_poll_event(db, room, "poll_created", poll_data)
+    await db.commit()
+
+    from app.routers.websocket import manager as ws_manager
+    await ws_manager.broadcast(str(room_id), {"type": "poll_created", "data": poll_data})
+
+    return poll_data
+
+
+@router.post("/{room_id}/polls/{poll_id}/vote")
+async def vote_on_poll(
+    room_id: uuid.UUID,
+    poll_id: uuid.UUID,
+    payload: PollVotePayload,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Cast a vote on an open poll. Weight is computed server-side."""
+    room = await db.get(Room, room_id)
+    if not room or not room.session_graph:
+        raise HTTPException(status_code=404, detail="Room not found or session graph missing.")
+
+    poll = await db.get(Poll, poll_id)
+    if not poll or str(poll.room_id) != str(room_id):
+        raise HTTPException(status_code=404, detail="Poll not found.")
+
+    try:
+        poll, quorum_reached = await cast_vote(
+            db=db,
+            poll=poll,
+            voter_id=payload.voter_id,
+            voter_type=payload.voter_type,
+            option_index=payload.option_index,
+            session_graph=room.session_graph,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    from app.routers.websocket import manager as ws_manager
+
+    if quorum_reached:
+        poll = await close_poll(db, poll)
+        action_spec = apply_result(poll)
+        poll_data = serialize_poll(poll)
+        if action_spec:
+            poll_data["action_spec"] = action_spec
+        await _insert_poll_event(db, room, "poll_closed", poll_data)
+        await db.commit()
+        await ws_manager.broadcast(str(room_id), {"type": "poll_closed", "data": poll_data})
+    else:
+        poll_data = serialize_poll(poll)
+        await db.commit()
+        await ws_manager.broadcast(str(room_id), {"type": "poll_updated", "data": poll_data})
+
+    return poll_data
+
+
+@router.get("/{room_id}/polls")
+async def list_room_polls(
+    room_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return all polls for this room, most recent first."""
+    from sqlalchemy import desc
+    result = await db.execute(
+        select(Poll).where(Poll.room_id == room_id).order_by(desc(Poll.created_at))
+    )
+    polls = result.scalars().all()
+    return {"polls": [serialize_poll(p) for p in polls]}
+
+
+@router.post("/{room_id}/polls/{poll_id}/veto")
+async def veto_room_poll(
+    room_id: uuid.UUID,
+    poll_id: uuid.UUID,
+    payload: PollVetoPayload,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Requester veto — overrides any poll result immediately."""
+    room = await db.get(Room, room_id)
+    if not room or not room.session_graph:
+        raise HTTPException(status_code=404, detail="Room not found or session graph missing.")
+
+    # Verify requester_id has Requester role in session graph
+    agents: list[dict] = room.session_graph.get("agents", [])
+    is_requester = any(
+        str(a.get("id", "")) == payload.requester_id
+        and a.get("role", "").lower() == "requester"
+        for a in agents
+    )
+    # Also allow human node with no explicit role restriction
+    is_human_requester = payload.requester_id == "human"
+    if not is_requester and not is_human_requester:
+        raise HTTPException(status_code=403, detail="Only the Requester can veto a poll.")
+
+    poll = await db.get(Poll, poll_id)
+    if not poll or str(poll.room_id) != str(room_id):
+        raise HTTPException(status_code=404, detail="Poll not found.")
+    from app.models.room import PollStatus as _PollStatus
+    if poll.status != _PollStatus.OPEN:
+        raise HTTPException(status_code=400, detail="Only open polls can be vetoed.")
+
+    poll = await veto_poll(db, poll)
+    poll_data = serialize_poll(poll)
+
+    await _insert_poll_event(db, room, "poll_vetoed", poll_data)
+    await db.commit()
+
+    from app.routers.websocket import manager as ws_manager
+    await ws_manager.broadcast(str(room_id), {"type": "poll_vetoed", "data": poll_data})
+
+    return poll_data
+
+
+# --- Coordinator ---
+
+class CoordinatorPlanUpdate(BaseModel):
+    assignments: list[dict]
+    summary: str
+
+
+@router.post("/{room_id}/coordinator/generate")
+async def generate_coordinator_plan_endpoint(
+    room_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Generate a coordinator task-assignment plan via Claude and persist it on the room."""
+    from app.services.coordinator_service import generate_coordinator_plan
+    try:
+        plan = await generate_coordinator_plan(db, room_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await db.commit()
+    return plan
+
+
+@router.put("/{room_id}/coordinator/plan")
+async def update_coordinator_plan(
+    room_id: uuid.UUID,
+    payload: CoordinatorPlanUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Persist a (possibly human-edited) coordinator plan on the room."""
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    room.coordinator_plan = {"assignments": payload.assignments, "summary": payload.summary}
+    flag_modified(room, "coordinator_plan")
+    await db.flush()
+    await db.commit()
+    return room.coordinator_plan
 
 
 # --- WebSocket ---

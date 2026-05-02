@@ -1,9 +1,10 @@
 """Router de Sesiones — recomendación de equipo de agentes."""
 
+import os
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -179,3 +180,28 @@ async def recommend_team(
         "estimated_cost": round(estimated_cost, 2),
         "reasoning": reasoning,
     }
+
+
+_TEXT_EXTS: frozenset[str] = frozenset({
+    ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".json", ".csv", ".yaml", ".yml", ".toml", ".html", ".css", ".sql",
+})
+_MAX_BYTES = 50 * 1024  # 50 KB per file
+
+
+@router.post("/upload-files")
+async def upload_files(files: list[UploadFile] = File(...)) -> dict:
+    """Accept uploaded files and return their text content as a context string for agents."""
+    parts: list[str] = []
+    for f in files:
+        name = f.filename or "unknown"
+        ext = os.path.splitext(name)[1].lower()
+        raw = await f.read()
+        if ext in _TEXT_EXTS:
+            content = raw[:_MAX_BYTES].decode("utf-8", errors="replace")
+            truncated = len(raw) > _MAX_BYTES
+            header = f"[File: {name}{' — truncated to 50 KB' if truncated else ''}]"
+            parts.append(f"{header}\n{content}")
+        else:
+            parts.append(f"[File: {name} — binary/unsupported format, use filename for context]")
+    return {"file_context": "\n\n---\n\n".join(parts)}

@@ -88,6 +88,7 @@ async def get_agent_response(
     message: str,
     session_messages: list[dict],
     acting_as: dict | None = None,
+    subtask: str | None = None,
 ) -> str:
     """Call the Claude API as the specified agent and return its response."""
     agent = AGENTS.get(agent_id)
@@ -131,6 +132,8 @@ async def get_agent_response(
             f"In this session you are acting as {name} with the role of {role}. "
             f"Respond accordingly.\n\n{system}"
         )
+    if subtask:
+        system = f"{system}\n\nYour assigned subtask for this session: {subtask}"
 
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
