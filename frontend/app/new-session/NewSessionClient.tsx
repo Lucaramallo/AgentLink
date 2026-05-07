@@ -138,6 +138,8 @@ export default function NewSessionClient() {
   const [taskDescription, setTaskDescription] = useState("");
   const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
   const [githubRepo, setGithubRepo] = useState("");
+  const [githubUrlValid, setGithubUrlValid] = useState(false);
+  const [githubUrlError, setGithubUrlError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -283,6 +285,21 @@ export default function NewSessionClient() {
       "al_new_session_pending",
       JSON.stringify({ taskDescription, acceptanceCriteria, githubRepo }),
     );
+  }
+
+  function handleConnectGitHub() {
+    if (!githubRepo.trim()) {
+      setGithubUrlError("Please enter a GitHub repository URL");
+      setGithubUrlValid(false);
+      return;
+    }
+    if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+/.test(githubRepo.trim())) {
+      setGithubUrlError("Invalid format. Use: https://github.com/user/repo");
+      setGithubUrlValid(false);
+      return;
+    }
+    setGithubUrlError(null);
+    setGithubUrlValid(true);
   }
 
   function handleBuildOwn() {
@@ -660,17 +677,35 @@ export default function NewSessionClient() {
               <div className="flex gap-2">
                 <input
                   value={githubRepo}
-                  onChange={(e) => setGithubRepo(e.target.value)}
+                  onChange={(e) => {
+                    setGithubRepo(e.target.value);
+                    setGithubUrlValid(false);
+                    setGithubUrlError(null);
+                  }}
                   placeholder="https://github.com/user/repo"
-                  className="flex-1 bg-al-surface border border-al-border rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                  className="flex-1 bg-al-surface rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted focus:outline-none transition-colors"
+                  style={{
+                    border: `1px solid ${githubUrlValid ? "rgba(34,197,94,0.6)" : githubUrlError ? "rgba(239,68,68,0.5)" : "var(--color-al-border, #1E2D4A)"}`,
+                  }}
                 />
                 <button
                   type="button"
-                  className="px-3 py-2 text-xs font-medium text-al-muted-2 border border-al-border rounded-lg hover:border-al-accent hover:text-al-accent transition-colors whitespace-nowrap"
+                  onClick={handleConnectGitHub}
+                  className="px-3 py-2 text-xs font-medium border rounded-lg transition-colors whitespace-nowrap"
+                  style={{
+                    color: githubUrlValid ? "#22C55E" : "var(--color-al-muted-2, #94A3B8)",
+                    borderColor: githubUrlValid ? "rgba(34,197,94,0.4)" : "var(--color-al-border, #1E2D4A)",
+                  }}
                 >
-                  Connect GitHub
+                  {githubUrlValid ? "✓ Connected" : "Connect GitHub"}
                 </button>
               </div>
+              {githubUrlError && (
+                <p className="text-xs text-red-400 mt-0.5">{githubUrlError}</p>
+              )}
+              {githubUrlValid && (
+                <p className="text-xs text-green-400 mt-0.5">Repository URL saved — will be linked to this session.</p>
+              )}
             </div>
 
             {/* Acceptance criteria */}

@@ -346,6 +346,7 @@ export default function SessionRoomClient() {
   // GitHub delivery
   const [githubPushing, setGithubPushing]       = useState(false);
   const [githubDeliveryUrl, setGithubDeliveryUrl] = useState<string | null>(null);
+  const [githubPushError, setGithubPushError]   = useState<string | null>(null);
 
   // Agent failure handling
   const [showFailureModal, setShowFailureModal] = useState(false);
@@ -388,6 +389,13 @@ export default function SessionRoomClient() {
   const [fbAgents, setFbAgents] = useState<string[]>([]);
   const [fbRetry, setFbRetry] = useState<boolean | null>(null);
   const [fbSubmitting, setFbSubmitting] = useState(false);
+
+  // Typewriter effect
+  const [revealedIds, setRevealedIds]           = useState<Set<string>>(new Set());
+  const [typingMessageId, setTypingMessageId]   = useState<string | null>(null);
+  const [typedChars, setTypedChars]             = useState(0);
+  const typewriterQueue                          = useRef<string[]>([]);
+  const processedForTypewriter                   = useRef(new Set<string>());
 
   // Propose Poll modal
   const [showProposePoll, setShowProposePoll] = useState(false);
@@ -436,6 +444,49 @@ export default function SessionRoomClient() {
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
   useEffect(() => { graphEdgesRef.current = graphEdges; }, [graphEdges]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // ── Typewriter: enqueue new agent messages & drain queue ──────────────────
+  useEffect(() => {
+    for (const msg of messages) {
+      if (
+        !msg.isHuman &&
+        msg.agentId !== "system" &&
+        msg.type !== "SYSTEM" &&
+        !processedForTypewriter.current.has(msg.id)
+      ) {
+        processedForTypewriter.current.add(msg.id);
+        typewriterQueue.current.push(msg.id);
+      }
+    }
+    if (typingMessageId === null && typewriterQueue.current.length > 0) {
+      setTypingMessageId(typewriterQueue.current.shift()!);
+    }
+  }, [messages, typingMessageId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Typewriter: animate current message ───────────────────────────────────
+  useEffect(() => {
+    if (typingMessageId === null) return;
+    const msg = messagesRef.current.find((m) => m.id === typingMessageId);
+    if (!msg || msg.content.length === 0) {
+      setRevealedIds((prev) => new Set([...prev, typingMessageId]));
+      setTypingMessageId(null);
+      return;
+    }
+    setTypedChars(0);
+    const totalChars = msg.content.length;
+    const timer = setInterval(() => {
+      setTypedChars((prev) => {
+        const next = prev + 1;
+        if (next >= totalChars) {
+          clearInterval(timer);
+          setRevealedIds((rids) => new Set([...rids, typingMessageId]));
+          setTypingMessageId(null);
+        }
+        return next;
+      });
+    }, 33); // ~30 chars/sec
+    return () => clearInterval(timer);
+  }, [typingMessageId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Flag set when we restore from sessionStorage — prevents API from overwriting
   const savedGraphLoadedRef = useRef(false);
@@ -983,7 +1034,11 @@ export default function SessionRoomClient() {
   }
 
   async function pushToGitHub() {
-    if (!deliverableMsg || !token) return;
+    if (!deliverableMsg || !token) {
+      setGithubPushError("You must be logged in to push to GitHub.");
+      return;
+    }
+    setGithubPushError(null);
     setGithubPushing(true);
     try {
       const sessionLog = messagesRef.current
@@ -1010,7 +1065,7 @@ export default function SessionRoomClient() {
       if (!res.ok) throw new Error(data.detail ?? "GitHub delivery failed");
       setGithubDeliveryUrl(data.branch_url);
     } catch (err) {
-      console.error("[GitHub delivery]", err);
+      setGithubPushError(err instanceof Error ? err.message : "GitHub push failed. Please try again.");
     } finally {
       setGithubPushing(false);
     }
@@ -1859,7 +1914,7 @@ export default function SessionRoomClient() {
         </div>
 
         {/* ── Right: chat (55%) ── */}
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
 
           {/* Chat header */}
           <div className="shrink-0 border-b border-al-border bg-al-surface px-5 py-3 flex items-center justify-between">
@@ -1989,6 +2044,16 @@ export default function SessionRoomClient() {
                   />
                 );
               }
+              const isAgentMsg = !msg.isHuman && msg.agentId !== "system" && msg.type !== "SYSTEM";
+              const isRevealed = !isAgentMsg || revealedIds.has(msg.id);
+              const isCurrentlyTyping = msg.id === typingMessageId;
+              const displayContent = isAgentMsg
+                ? (revealedIds.has(msg.id)
+                    ? msg.content
+                    : isCurrentlyTyping
+                      ? msg.content.slice(0, typedChars)
+                      : "")
+                : undefined;
               return (
                 <MessageBubble
                   key={msg.id}
@@ -1996,7 +2061,10 @@ export default function SessionRoomClient() {
                   roomId={roomId}
                   cluster={clusterByNodeId.get(msg.agentId)}
                   deliverableExt={deliverableExt}
-                  onDownloadDeliverable={msg.type === "DELIVERABLE" ? downloadDeliverable : undefined}
+                  displayContent={displayContent}
+                  isTyping={isCurrentlyTyping}
+                  useMarkdown={isRevealed}
+                  onDownloadDeliverable={msg.type === "DELIVERABLE" && isRevealed ? downloadDeliverable : undefined}
                 />
               );
             })}
@@ -2547,7 +2615,8 @@ export default function SessionRoomClient() {
           githubPushing={githubPushing}
           githubDeliveryUrl={githubDeliveryUrl}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
-          onPushGitHub={deliverableMsg && outcome === "SUCCESS" ? pushToGitHub : undefined}
+          onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username ? pushToGitHub : undefined}
+          githubPushError={githubPushError}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
         />
@@ -2713,12 +2782,18 @@ function MessageBubble({
   roomId,
   cluster,
   deliverableExt = "md",
+  displayContent,
+  isTyping = false,
+  useMarkdown = true,
   onDownloadDeliverable,
 }: {
   msg: Message;
   roomId: string;
   cluster?: GraphCluster;
   deliverableExt?: string;
+  displayContent?: string;
+  isTyping?: boolean;
+  useMarkdown?: boolean;
   onDownloadDeliverable?: (msg: Message) => void;
 }) {
   const rc  = msg.isHuman ? HUMAN_COLOR : (ROLE_COLOR[msg.role] ?? "#64748B");
@@ -2726,7 +2801,7 @@ function MessageBubble({
   const ini = msg.isHuman ? "YOU" : initials(msg.agentName);
 
   return (
-    <div className="flex gap-3">
+    <div className="flex gap-3 min-w-0">
       <div
         className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold"
         style={{ background: `${rc}1A`, border: `1.5px solid ${rc}55`, color: rc }}
@@ -2772,11 +2847,40 @@ function MessageBubble({
             {msg.sigValid ? "sig valid" : "sig invalid"}
           </span>
         </div>
-        <div
-          className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
-          style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
-        />
+        {(() => {
+          const content = displayContent !== undefined ? displayContent : msg.content;
+          const showPlaceholder = displayContent === "" && !isTyping;
+          if (showPlaceholder) {
+            return (
+              <div
+                className="rounded-xl px-3.5 py-2.5 text-sm text-al-muted"
+                style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
+              >
+                <span className="animate-pulse">···</span>
+              </div>
+            );
+          }
+          if (useMarkdown) {
+            return (
+              <div
+                className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
+                style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+              />
+            );
+          }
+          return (
+            <div
+              className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
+              style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
+            >
+              <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{content}</span>
+              {isTyping && (
+                <span className="animate-pulse text-al-accent ml-0.5" style={{ fontWeight: 300 }}>|</span>
+              )}
+            </div>
+          );
+        })()}
         {onDownloadDeliverable && (
           <button
             onClick={() => onDownloadDeliverable(msg)}
@@ -3144,6 +3248,7 @@ function CloseModal({
   githubConnected,
   githubPushing,
   githubDeliveryUrl,
+  githubPushError,
   onDownloadDeliverable,
   onPushGitHub,
   onDownload,
@@ -3165,6 +3270,7 @@ function CloseModal({
   githubConnected?: boolean;
   githubPushing?: boolean;
   githubDeliveryUrl?: string | null;
+  githubPushError?: string | null;
   onDownloadDeliverable?: (msg: Message) => void;
   onPushGitHub?: () => void;
   onDownload: () => void;
@@ -3408,6 +3514,11 @@ function CloseModal({
             <p className="text-center text-xs text-al-muted py-1">
               Connect GitHub in your profile to push deliverables
             </p>
+          )}
+          {githubPushError && (
+            <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30">
+              <p className="text-xs text-red-400">{githubPushError}</p>
+            </div>
           )}
           <div className="flex gap-3">
             <button
