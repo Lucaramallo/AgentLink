@@ -9,9 +9,38 @@ import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
 import { useAuth } from "../../lib/auth";
 
-const API_BASE = "http://192.168.0.116:8000/api/v1";
+const API_BASE = "http://192.168.0.108:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
 const OWNER_B = "7059dca2-afe8-4908-9e69-b2451b0be356";
+
+// ── Team template types & helpers ──────────────────────────────────────────
+
+interface TeamTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string }>;
+  edges: Array<{ from: string; to: string }>;
+  clusters: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number; subTask: string }>;
+  created_at: string;
+}
+
+function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("agentlink_token");
+}
+
+async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers as Record<string, string> | undefined),
+    },
+  });
+}
 
 function parseTimeoutHours(s: string): number {
   if (s === "1 week") return 168;
@@ -222,6 +251,16 @@ export default function SessionBuildClient() {
   const [isDragging, setIsDragging] = useState(false);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Team templates
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [showLoadTemplateModal, setShowLoadTemplateModal] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templateDesc, setTemplateDesc] = useState("");
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [templateSaveError, setTemplateSaveError] = useState<string | null>(null);
+  const [savedTemplates, setSavedTemplates] = useState<TeamTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
 
   // Keep refs in sync with state
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -503,6 +542,15 @@ export default function SessionBuildClient() {
     }
 
     // ── Nodes ────────────────────────────────────────────────────────────
+    // Build per-agent instance counters so duplicates show "(2)", "(3)" etc.
+    const agentInstanceCounter = new Map<string, number>();
+    const nodeInstanceIndex = new Map<string, number>();
+    for (const n of nodes) {
+      const count = (agentInstanceCounter.get(n.agent.id) ?? 0) + 1;
+      agentInstanceCounter.set(n.agent.id, count);
+      nodeInstanceIndex.set(n.id, count);
+    }
+
     for (const node of nodes) {
       const rc = node.isHuman ? HUMAN_COLOR : ROLE_COLOR[node.role];
       const active =
@@ -559,11 +607,15 @@ export default function SessionBuildClient() {
       ctx.font = `11px ${FONT}`;
       ctx.fillStyle = "#CBD5E1";
       const maxW = NR * 1.7;
-      let label = node.agent.name;
+      const instanceIdx = nodeInstanceIndex.get(node.id) ?? 1;
+      const instanceCount = agentInstanceCounter.get(node.agent.id) ?? 1;
+      const suffix = instanceCount > 1 && instanceIdx > 1 ? ` (${instanceIdx})` : "";
+      const fullLabel = node.agent.name + suffix;
+      let label = fullLabel;
       while (ctx.measureText(label).width > maxW && label.length > 2) {
         label = label.slice(0, -1);
       }
-      if (label !== node.agent.name) label += "…";
+      if (label !== fullLabel) label += "…";
       ctx.fillText(label, node.x, node.y + 10);
 
       // Coordinator crown badge (top-left of node)
@@ -879,17 +931,16 @@ export default function SessionBuildClient() {
 
   function setRole(nodeId: string, role: SessionRole) {
     if (role === "Coordinator") {
-      const alreadyHasCoordinator = nodesRef.current.some(
-        (n) => n.id !== nodeId && n.role === "Coordinator",
-      );
-      if (alreadyHasCoordinator) {
-        setContextMenu(null);
-        return;
-      }
-      // Auto-connect the Coordinator to every non-human, non-Observer agent
-      const targets = nodesRef.current.filter(
-        (n) => n.id !== nodeId && !n.isHuman && n.role !== "Observer",
-      );
+      // Determine scope: same cluster → agents in that cluster; no cluster → unclastered agents
+      const thisNode = nodesRef.current.find((n) => n.id === nodeId);
+      const thisCluster = thisNode?.clusterId;
+      const targets = nodesRef.current.filter((n) => {
+        if (n.id === nodeId) return false;
+        if (n.isHuman) return false;
+        if (n.role === "Observer" || n.role === "Coordinator") return false;
+        if (thisCluster) return n.clusterId === thisCluster;
+        return !n.clusterId;
+      });
       setConns((prev) => {
         const next = [...prev];
         for (const t of targets) {
@@ -936,6 +987,108 @@ export default function SessionBuildClient() {
     setContextMenu(null);
   }
 
+  // ── Team template save/load ─────────────────────────────────────────────
+
+  async function saveTemplate() {
+    if (!templateName.trim()) return;
+    setTemplateSaving(true);
+    setTemplateSaveError(null);
+    try {
+      const body = {
+        name: templateName.trim(),
+        description: templateDesc.trim() || null,
+        agents: nodesRef.current
+          .filter((n) => !n.isHuman)
+          .map((n) => ({ slug: n.agent.id, role: n.role, cluster_id: n.clusterId ?? null })),
+        edges: connsRef.current.map((c) => ({ from: c.fromId, to: c.toId })),
+        clusters: clustersRef.current.map((c) => ({
+          id: c.id, name: c.name, color: c.color,
+          x: c.x, y: c.y, rx: c.rx, ry: c.ry, subTask: c.subTask,
+        })),
+      };
+      const res = await apiFetch("/team-templates", { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error("Failed to save template");
+      setShowSaveTemplateModal(false);
+      setTemplateName("");
+      setTemplateDesc("");
+    } catch (e) {
+      setTemplateSaveError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setTemplateSaving(false);
+    }
+  }
+
+  async function loadTemplatesList() {
+    setTemplatesLoading(true);
+    try {
+      const res = await apiFetch("/team-templates");
+      if (res.ok) setSavedTemplates(await res.json());
+    } catch { /* ignore */ }
+    setTemplatesLoading(false);
+  }
+
+  function applyTemplate(template: TeamTemplate) {
+    // Map slugs back to Agent objects from allAgents
+    const newNodes: CanvasNode[] = [];
+    const margin = 120;
+    for (const ta of template.agents) {
+      const agent = allAgents.find((a) => a.id === ta.slug);
+      if (!agent) continue;
+      const existingCount = newNodes.filter((n) => n.agent.id === agent.id).length;
+      const id = existingCount === 0 ? `node-${agent.id}-${Date.now()}` : `node-${agent.id}-${Date.now()}-${existingCount}`;
+      const x = margin + Math.random() * 600;
+      const y = margin + Math.random() * 400;
+      newNodes.push({ id, x, y, agent, role: ta.role, clusterId: ta.cluster_id ?? undefined });
+    }
+    const newConns: Conn[] = template.edges.map((e, i) => ({
+      id: `tconn-${i}-${Date.now()}`,
+      fromId: e.from,
+      toId: e.to,
+    }));
+    const newClusters: Cluster[] = template.clusters.map((c) => ({ ...c }));
+    setNodes(newNodes);
+    setConns(newConns);
+    setClusters(newClusters);
+    setShowLoadTemplateModal(false);
+  }
+
+  async function deleteTemplate(id: string) {
+    await apiFetch(`/team-templates/${id}`, { method: "DELETE" });
+    setSavedTemplates((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  // Load template from ?template= query param (runs after allAgents and applyTemplate are available)
+  const templateLoadedRef = useRef(false);
+  useEffect(() => {
+    if (allAgents.length === 0 || templateLoadedRef.current) return;
+    const templateId = searchParams.get("template");
+    if (!templateId) return;
+    templateLoadedRef.current = true;
+    apiFetch(`/team-templates/${templateId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((t: TeamTemplate | null) => { if (t) applyTemplate(t); })
+      .catch(() => {});
+  }, [allAgents]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function linkToAll(nodeId: string) {
+    setConns((prev) => {
+      const next = [...prev];
+      for (const n of nodesRef.current) {
+        if (n.id === nodeId) continue;
+        const alreadyLinked = next.some(
+          (c) =>
+            (c.fromId === nodeId && c.toId === n.id) ||
+            (c.fromId === n.id && c.toId === nodeId),
+        );
+        if (!alreadyLinked) {
+          next.push({ id: `${nodeId}-${n.id}-${Date.now()}`, fromId: nodeId, toId: n.id });
+        }
+      }
+      return next;
+    });
+    setContextMenu(null);
+  }
+
   // ── Cluster creation ─────────────────────────────────────────────────────
 
   function createCluster() {
@@ -953,8 +1106,6 @@ export default function SessionBuildClient() {
   // ── Agent picker ─────────────────────────────────────────────────────────
 
   function addAgent(agent: Agent) {
-    const already = nodesRef.current.find((n) => n.agent.id === agent.id);
-    if (already) return;
     const margin = 120 / zoomRef.current;
     const worldXMin = -panRef.current.x / zoomRef.current + margin;
     const worldXMax = (canvasW - panRef.current.x) / zoomRef.current - margin;
@@ -1197,7 +1348,6 @@ export default function SessionBuildClient() {
   // ── Picker agents ────────────────────────────────────────────────────────
 
   const pickerAgents = allAgents.filter((a) => {
-    if (nodes.some((n) => n.agent.id === a.id)) return false;
     if (!pickerSearch) return true;
     const q = pickerSearch.toLowerCase();
     return (
@@ -1229,6 +1379,20 @@ export default function SessionBuildClient() {
               <span className="text-base leading-none">💰</span>
               <span className="text-sm font-semibold text-amber-400 tabular-nums">{balance} ALC</span>
             </div>
+            <button
+              onClick={() => { setShowSaveTemplateModal(true); setTemplateSaveError(null); }}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium border border-al-border text-al-muted hover:text-al-text hover:border-al-accent/50 transition-colors"
+              title="Save team as template"
+            >
+              Save Template
+            </button>
+            <button
+              onClick={() => { setShowLoadTemplateModal(true); loadTemplatesList(); }}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium border border-al-border text-al-muted hover:text-al-text hover:border-al-accent/50 transition-colors"
+              title="Load a saved team template"
+            >
+              Load Template
+            </button>
             <button
             disabled={!canOpen || openLoading}
             onClick={openSession}
@@ -1508,34 +1672,26 @@ export default function SessionBuildClient() {
                 <div className="px-3 py-1.5 text-[10px] text-al-muted uppercase tracking-wider border-b border-al-border mb-1">
                   Set Role
                 </div>
-                {ROLES.map((role) => {
-                  const coordinatorTaken =
-                    role === "Coordinator" &&
-                    node.role !== "Coordinator" &&
-                    nodes.some((n) => n.id !== contextMenu.nodeId && n.role === "Coordinator");
-                  return (
-                    <button
-                      key={role}
-                      onClick={() => setRole(contextMenu.nodeId, role)}
-                      disabled={coordinatorTaken}
-                      className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm transition-colors ${coordinatorTaken ? "opacity-40 cursor-not-allowed" : "hover:bg-al-border/30"}`}
-                    >
-                      <span
-                        className="w-2 h-2 rounded-full flex-shrink-0"
-                        style={{ background: ROLE_COLOR[role] }}
-                      />
-                      <span className={node.role === role ? "text-al-accent" : "text-al-text"}>
-                        {role}
-                        {coordinatorTaken && <span className="text-al-muted text-[10px] ml-1">(max 1)</span>}
-                      </span>
-                      {node.role === role && (
-                        <svg className="w-3 h-3 ml-auto text-al-accent" fill="none" viewBox="0 0 12 12" stroke="currentColor">
-                          <path strokeLinecap="round" strokeWidth={1.5} d="M2 6l3 3 5-5" />
-                        </svg>
-                      )}
-                    </button>
-                  );
-                })}
+                {ROLES.map((role) => (
+                  <button
+                    key={role}
+                    onClick={() => setRole(contextMenu.nodeId, role)}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm transition-colors hover:bg-al-border/30"
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ background: ROLE_COLOR[role] }}
+                    />
+                    <span className={node.role === role ? "text-al-accent" : "text-al-text"}>
+                      {role}
+                    </span>
+                    {node.role === role && (
+                      <svg className="w-3 h-3 ml-auto text-al-accent" fill="none" viewBox="0 0 12 12" stroke="currentColor">
+                        <path strokeLinecap="round" strokeWidth={1.5} d="M2 6l3 3 5-5" />
+                      </svg>
+                    )}
+                  </button>
+                ))}
                 <div className="border-t border-al-border mt-1 pt-1">
                   {/* Builder toggle */}
                   <button
@@ -1577,6 +1733,16 @@ export default function SessionBuildClient() {
                       <path d="M5 7h4" strokeWidth="1.5" strokeLinecap="round" />
                     </svg>
                     Link agent
+                  </button>
+                  <button
+                    onClick={() => linkToAll(contextMenu.nodeId)}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-al-text hover:bg-al-border/30 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5 text-al-muted flex-shrink-0" fill="none" viewBox="0 0 14 14" stroke="currentColor">
+                      <circle cx="7" cy="7" r="2" strokeWidth="1.5" />
+                      <path d="M7 1v2M7 11v2M1 7h2M11 7h2" strokeWidth="1.2" strokeLinecap="round" />
+                    </svg>
+                    Link to all →
                   </button>
                   <button
                     onClick={() => removeNode(contextMenu.nodeId)}
@@ -1625,9 +1791,7 @@ export default function SessionBuildClient() {
                 <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-0.5">
                   {pickerAgents.length === 0 ? (
                     <p className="text-xs text-al-muted text-center py-8">
-                      {allAgents.every((a) => nodes.some((n) => n.agent.id === a.id))
-                        ? "All agents are already on the canvas"
-                        : "No agents match your search"}
+                      No agents match your search
                     </p>
                   ) : (
                     pickerAgents.map((agent) => (
@@ -2057,6 +2221,105 @@ export default function SessionBuildClient() {
           }}
           onCancel={() => setShowCostModal(false)}
         />
+      )}
+
+      {/* Save Template modal */}
+      {showSaveTemplateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-sm mx-4 rounded-2xl border border-al-border bg-al-surface p-6 flex flex-col gap-4">
+            <h2 className="text-base font-bold text-al-text">Save as Team Template</h2>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-al-muted">Template name *</label>
+              <input
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="My dream team"
+                className="bg-al-bg border border-al-border rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-al-muted">Description (optional)</label>
+              <textarea
+                value={templateDesc}
+                onChange={(e) => setTemplateDesc(e.target.value)}
+                placeholder="Best team for code review tasks…"
+                rows={2}
+                className="bg-al-bg border border-al-border rounded-lg px-3 py-2 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors resize-none"
+              />
+            </div>
+            {templateSaveError && (
+              <p className="text-xs text-red-400">{templateSaveError}</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowSaveTemplateModal(false); setTemplateName(""); setTemplateDesc(""); }}
+                className="flex-1 py-2 rounded-lg text-sm border border-al-border text-al-muted hover:text-al-text transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveTemplate}
+                disabled={!templateName.trim() || templateSaving}
+                className="flex-1 py-2 rounded-lg text-sm font-semibold bg-al-accent text-al-bg hover:bg-al-accent-dim disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {templateSaving ? "Saving…" : "Save Template"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Load Template modal */}
+      {showLoadTemplateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-md mx-4 rounded-2xl border border-al-border bg-al-surface p-6 flex flex-col gap-4 max-h-[80vh]">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-al-text">Load Team Template</h2>
+              <button onClick={() => setShowLoadTemplateModal(false)} className="text-al-muted hover:text-al-text transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            </div>
+            {templatesLoading ? (
+              <div className="flex items-center justify-center py-8 text-al-muted text-sm">Loading templates…</div>
+            ) : savedTemplates.length === 0 ? (
+              <p className="text-sm text-al-muted text-center py-8">No saved templates yet. Build a team and click "Save Template".</p>
+            ) : (
+              <div className="overflow-y-auto flex flex-col gap-2 pr-1">
+                {savedTemplates.map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-start gap-3 p-3 rounded-xl border border-al-border bg-al-bg hover:border-al-accent/40 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-al-text truncate">{t.name}</p>
+                      {t.description && <p className="text-xs text-al-muted mt-0.5 truncate">{t.description}</p>}
+                      <div className="flex gap-2 mt-1 flex-wrap">
+                        <span className="text-[10px] text-al-muted-2">{t.agents.length} agent{t.agents.length !== 1 ? "s" : ""}</span>
+                        <span className="text-[10px] text-al-muted-2">{new Date(t.created_at).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => applyTemplate(t)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-al-accent/15 text-al-accent border border-al-accent/30 hover:bg-al-accent/25 transition-colors"
+                      >
+                        Load →
+                      </button>
+                      <button
+                        onClick={() => deleteTemplate(t.id)}
+                        className="px-2 py-1.5 rounded-lg text-xs text-red-400 border border-red-400/20 hover:bg-red-400/10 transition-colors"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

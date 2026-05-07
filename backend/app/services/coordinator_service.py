@@ -12,11 +12,15 @@ from sqlalchemy.orm import selectinload
 from app.models.room import Room
 
 
-async def generate_coordinator_plan(db: AsyncSession, room_id: uuid.UUID) -> dict:
-    """Generate a task assignment plan via Claude and persist it on the room.
+async def generate_coordinator_plan(
+    db: AsyncSession,
+    room_id: uuid.UUID,
+    agent_ids: list[str] | None = None,
+) -> dict:
+    """Generate a task assignment plan via Claude for a scoped set of agents.
 
-    Returns the coordinator_plan dict:
-    {"assignments": [{"agent_id": str, "agent_name": str, "subtask": str}, ...], "summary": str}
+    agent_ids: when provided, restrict assignments to these agent IDs (coordinator scope).
+    Returns: {"assignments": [...], "summary": str}
     """
     result = await db.execute(
         select(Room).options(selectinload(Room.contract)).where(Room.room_id == room_id)
@@ -36,6 +40,10 @@ async def generate_coordinator_plan(db: AsyncSession, room_id: uuid.UUID) -> dic
         if not a.get("is_human", False)
         and a.get("role", "") not in ("Coordinator", "Observer")
     ]
+
+    # Restrict to the provided scope when given
+    if agent_ids is not None:
+        assignable = [a for a in assignable if a["id"] in agent_ids]
 
     if not assignable:
         raise ValueError("No assignable agents found in session graph.")

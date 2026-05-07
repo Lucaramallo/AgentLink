@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Fernet key for encrypting github_access_token — generate with: Fernet.generate_key().decode()
     github_token_encryption_key: str = "ZmDfcTF7_60GrrY167zsiPd_GbNOCKhm3K35q4E3bnY="
     # Frontend URL for OAuth redirects
-    frontend_url: str = "http://192.168.0.116:3001"
+    frontend_url: str = "http://192.168.0.108:3001"
     # GitHub REST API base URL
     github_api_url: str = "https://api.github.com"
     # Server-side ed25519 signing key (base64) — used to sign human-proposed polls

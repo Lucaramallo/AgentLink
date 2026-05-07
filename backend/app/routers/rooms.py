@@ -720,19 +720,67 @@ class CoordinatorPlanUpdate(BaseModel):
     summary: str
 
 
+class CoordinatorGenerateRequest(BaseModel):
+    agent_ids: list[str] | None = None
+    coordinator_id: str | None = None
+
+
 @router.post("/{room_id}/coordinator/generate")
 async def generate_coordinator_plan_endpoint(
     room_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    payload: CoordinatorGenerateRequest = CoordinatorGenerateRequest(),
 ) -> dict:
-    """Generate a coordinator task-assignment plan via Claude and persist it on the room."""
+    """Generate a scoped coordinator plan and merge it into room.coordinator_plan.
+
+    When agent_ids is provided, only those agents are assigned.  Existing
+    assignments for other agents are preserved so multiple coordinators can
+    each call this endpoint without overwriting each other's work.
+    """
     from app.services.coordinator_service import generate_coordinator_plan
     try:
-        plan = await generate_coordinator_plan(db, room_id)
+        new_plan = await generate_coordinator_plan(db, room_id, agent_ids=payload.agent_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # Merge into existing plan without overwriting existing assignments.
+    room = await db.get(Room, room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found.")
+
+    existing = room.coordinator_plan or {"assignments": [], "summary": ""}
+    existing_ids = {a["agent_id"] for a in existing.get("assignments", [])}
+
+    merged_assignments = list(existing.get("assignments", []))
+    for a in new_plan.get("assignments", []):
+        if a["agent_id"] not in existing_ids:
+            merged_assignments.append(a)
+
+    # Build a combined summary
+    existing_summary = existing.get("summary", "")
+    new_summary = new_plan.get("summary", "")
+    if existing_summary and new_summary and existing_summary != new_summary:
+        combined_summary = f"{existing_summary}\n\n{new_summary}"
+    else:
+        combined_summary = new_summary or existing_summary
+
+    merged_plan = {"assignments": merged_assignments, "summary": combined_summary}
+    if payload.coordinator_id:
+        # Tag which coordinator produced this batch so the frontend can tab by coordinator
+        merged_plan.setdefault("coordinator_plans", {})[payload.coordinator_id] = {
+            "assignments": new_plan.get("assignments", []),
+            "summary": new_summary,
+        }
+        # Carry forward any existing per-coordinator plans
+        for cid, cp in existing.get("coordinator_plans", {}).items():
+            if cid != payload.coordinator_id:
+                merged_plan["coordinator_plans"][cid] = cp
+
+    room.coordinator_plan = merged_plan
+    flag_modified(room, "coordinator_plan")
+    await db.flush()
     await db.commit()
-    return plan
+    return merged_plan
 
 
 @router.put("/{room_id}/coordinator/plan")

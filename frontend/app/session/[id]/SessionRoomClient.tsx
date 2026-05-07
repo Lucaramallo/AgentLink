@@ -11,7 +11,7 @@ import PollCard, { type PollType } from "./PollCard";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const API = "http://192.168.0.116:8000/api/v1";
+const API = "http://192.168.0.108:8000/api/v1";
 const NR  = 40;
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
@@ -378,6 +378,26 @@ export default function SessionRoomClient() {
   const agentDisplayStatesRef = useRef<Record<string, AgentDisplayState>>({});
   useEffect(() => { agentDisplayStatesRef.current = agentDisplayStates; }, [agentDisplayStates]);
 
+  // Animation tick — drives pulsing ring redraws while any agent is THINKING
+  const [animTick, setAnimTick] = useState(0);
+  const animFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    const anyThinking = Object.values(agentDisplayStates).some((s) => s === "thinking");
+    if (anyThinking) {
+      let running = true;
+      const tick = () => {
+        if (!running) return;
+        setAnimTick((t) => t + 1);
+        animFrameRef.current = requestAnimationFrame(tick);
+      };
+      animFrameRef.current = requestAnimationFrame(tick);
+      return () => {
+        running = false;
+        if (animFrameRef.current !== null) cancelAnimationFrame(animFrameRef.current);
+      };
+    }
+  }, [agentDisplayStates]);
+
   // Polls
   const [polls, setPolls] = useState<PollType[]>([]);
   const [humanVotedPollIds, setHumanVotedPollIds] = useState<Set<string>>(new Set());
@@ -411,10 +431,12 @@ export default function SessionRoomClient() {
   const [coordinatorPlan, setCoordinatorPlan] = useState<{
     assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>;
     summary: string;
+    coordinator_plans?: Record<string, { assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>; summary: string }>;
   } | null>(null);
   const [coordinatorPlanLoading, setCoordinatorPlanLoading] = useState(false);
   const [editedAssignments, setEditedAssignments] = useState<Array<{ agent_id: string; agent_name: string; subtask: string }>>([]);
   const [confirmingPlan, setConfirmingPlan] = useState(false);
+  const [activeCoordinatorTab, setActiveCoordinatorTab] = useState<string | null>(null);
   const coordinatorPlanResolveRef = useRef<(() => void) | null>(null);
   const coordinatorPlanRef = useRef<{ assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>; summary: string } | null>(null);
 
@@ -476,7 +498,7 @@ export default function SessionRoomClient() {
     const totalChars = msg.content.length;
     const timer = setInterval(() => {
       setTypedChars((prev) => {
-        const next = prev + 1;
+        const next = prev + 10;
         if (next >= totalChars) {
           clearInterval(timer);
           setRevealedIds((rids) => new Set([...rids, typingMessageId]));
@@ -484,7 +506,7 @@ export default function SessionRoomClient() {
         }
         return next;
       });
-    }, 33); // ~30 chars/sec
+    }, 33); // ~300 chars/sec
     return () => clearInterval(timer);
   }, [typingMessageId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -733,14 +755,33 @@ export default function SessionRoomClient() {
       if (!node.isHuman) {
         const ds = agentDisplayStatesRef.current[node.id];
         if (ds === "thinking") {
-          // Dashed outer ring — "speaking now"
+          const now = Date.now();
+          // Pulsing outer ring — alpha oscillates between 0.45 and 1
+          const pulse = 0.7 + 0.3 * Math.sin(now / 300);
           ctx.beginPath();
           ctx.arc(node.x, node.y, NR + 7, 0, Math.PI * 2);
-          ctx.strokeStyle = "#4ECDC4";
-          ctx.lineWidth = 2;
+          ctx.strokeStyle = `rgba(78,205,196,${pulse.toFixed(2)})`;
+          ctx.lineWidth = 2.5;
+          const dashOffset = -(now / 30) % 20;
           ctx.setLineDash([6, 4]);
+          ctx.lineDashOffset = dashOffset;
           ctx.stroke();
           ctx.setLineDash([]);
+          ctx.lineDashOffset = 0;
+          // "···" badge above the node
+          const dotY = node.y - NR - 16;
+          ctx.beginPath();
+          ctx.roundRect(node.x - 16, dotY - 8, 32, 16, 8);
+          ctx.fillStyle = "rgba(78,205,196,0.15)";
+          ctx.fill();
+          ctx.strokeStyle = "rgba(78,205,196,0.5)";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.font = `bold 11px ${FONT}`;
+          ctx.fillStyle = "#4ECDC4";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("···", node.x, dotY);
         } else if (ds === "responded" || ds === "skipped") {
           const sbx = node.x - NR * 0.68;
           const sby = node.y - NR * 0.68;
@@ -777,7 +818,7 @@ export default function SessionRoomClient() {
     }
 
     ctx.restore();
-  }, [graphNodes, graphEdges, graphClusters, canvasW, canvasH, agentDisplayStates]);
+  }, [graphNodes, graphEdges, graphClusters, canvasW, canvasH, agentDisplayStates, animTick]);
 
   // ── Auto-scroll ──────────────────────────────────────────────────────────
 
@@ -905,7 +946,7 @@ export default function SessionRoomClient() {
     let ws: WebSocket;
 
     try {
-      ws = new WebSocket(`ws://192.168.0.116:8000/ws/rooms/${roomId}`);
+      ws = new WebSocket(`ws://192.168.0.108:8000/ws/rooms/${roomId}`);
       wsRef.current = ws;
     } catch {
       return;
@@ -1078,17 +1119,40 @@ export default function SessionRoomClient() {
     if (agents.length === 0) return;
 
     // ── Coordinator pre-round plan ─────────────────────────────────────────
-    const hasCoordinator = graphNodesRef.current.some((n) => n.role === "Coordinator");
-    if (hasCoordinator) {
+    const coordinators = graphNodesRef.current.filter((n) => n.role === "Coordinator");
+    if (coordinators.length > 0) {
       setCoordinatorPlanLoading(true);
       setShowCoordinatorPlan(true);
       try {
-        const res = await fetch(`${API}/rooms/${roomId}/coordinator/generate`, { method: "POST" });
-        if (res.ok) {
-          const plan = await res.json();
-          setCoordinatorPlan(plan);
-          setEditedAssignments(plan.assignments ?? []);
-          coordinatorPlanRef.current = plan;
+        const allNonCoord = graphNodesRef.current.filter(
+          (n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator",
+        );
+        // Call generate sequentially per coordinator so merging is deterministic
+        for (const coord of coordinators) {
+          const scopedAgents = allNonCoord.filter((n) =>
+            coord.clusterId ? n.clusterId === coord.clusterId : !n.clusterId,
+          );
+          if (scopedAgents.length === 0) continue;
+          const body = {
+            agent_ids: scopedAgents.map((n) => n.id),
+            coordinator_id: coord.id,
+          };
+          try {
+            const res = await fetch(`${API}/rooms/${roomId}/coordinator/generate`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            if (res.ok) {
+              const plan = await res.json();
+              // Each iteration returns the progressively merged plan
+              setCoordinatorPlan(plan);
+              setEditedAssignments(plan.assignments ?? []);
+              coordinatorPlanRef.current = plan;
+              // Set default tab to first coordinator
+              setActiveCoordinatorTab((prev) => prev ?? coord.id);
+            }
+          } catch { /* non-blocking per coordinator */ }
         }
       } catch { /* non-blocking */ }
       setCoordinatorPlanLoading(false);
@@ -2451,7 +2515,19 @@ export default function SessionRoomClient() {
       )}
 
       {/* Coordinator plan modal — shown before session starts when a Coordinator agent is present */}
-      {showCoordinatorPlan && (
+      {showCoordinatorPlan && (() => {
+        const perCoordPlans = coordinatorPlan?.coordinator_plans ?? {};
+        const coordIds = Object.keys(perCoordPlans);
+        const isMultiCoord = coordIds.length > 1;
+        const activeTab = activeCoordinatorTab ?? coordIds[0] ?? null;
+        const tabAssignments = isMultiCoord && activeTab
+          ? (perCoordPlans[activeTab]?.assignments ?? [])
+          : editedAssignments;
+        const tabSummary = isMultiCoord && activeTab
+          ? (perCoordPlans[activeTab]?.summary ?? "")
+          : (coordinatorPlan?.summary ?? "");
+        const coordNode = (id: string) => graphNodesRef.current.find((n) => n.id === id);
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div
             className="relative w-full max-w-lg mx-4 rounded-2xl border p-6 flex flex-col gap-5"
@@ -2465,6 +2541,28 @@ export default function SessionRoomClient() {
               </div>
             </div>
 
+            {/* Tabs — only shown when multiple coordinators */}
+            {isMultiCoord && !coordinatorPlanLoading && (
+              <div className="flex gap-1 border-b border-al-border pb-0">
+                {coordIds.map((cid) => {
+                  const label = coordNode(cid)?.label ?? cid;
+                  return (
+                    <button
+                      key={cid}
+                      onClick={() => setActiveCoordinatorTab(cid)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-t transition-colors ${
+                        activeTab === cid
+                          ? "text-orange-400 border-b-2 border-orange-400"
+                          : "text-al-muted hover:text-al-text"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {coordinatorPlanLoading ? (
               <div className="flex items-center justify-center py-8 gap-3">
                 <svg className="w-5 h-5 animate-spin text-orange-400" fill="none" viewBox="0 0 24 24">
@@ -2475,9 +2573,9 @@ export default function SessionRoomClient() {
               </div>
             ) : coordinatorPlan ? (
               <div className="flex flex-col gap-4">
-                <p className="text-sm text-al-text leading-relaxed">{coordinatorPlan.summary}</p>
+                <p className="text-sm text-al-text leading-relaxed">{tabSummary}</p>
                 <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
-                  {editedAssignments.map((a, idx) => (
+                  {(isMultiCoord ? tabAssignments : editedAssignments).map((a, idx) => (
                     <div
                       key={a.agent_id}
                       className="flex gap-3 items-start rounded-lg p-3"
@@ -2491,22 +2589,26 @@ export default function SessionRoomClient() {
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-white mb-1">{a.agent_name}</p>
-                        <textarea
-                          value={a.subtask}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setEditedAssignments((prev) =>
-                              prev.map((x, i) => (i === idx ? { ...x, subtask: val } : x)),
-                            );
-                          }}
-                          rows={2}
-                          className="w-full text-xs bg-black/20 border border-white/10 rounded px-2 py-1.5 text-al-text placeholder:text-al-muted focus:outline-none focus:border-orange-500/50 transition-colors resize-none"
-                        />
+                        {isMultiCoord ? (
+                          <p className="text-xs text-al-muted leading-relaxed">{a.subtask}</p>
+                        ) : (
+                          <textarea
+                            value={a.subtask}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditedAssignments((prev) =>
+                                prev.map((x, i) => (i === idx ? { ...x, subtask: val } : x)),
+                              );
+                            }}
+                            rows={2}
+                            className="w-full text-xs bg-black/20 border border-white/10 rounded px-2 py-1.5 text-al-text placeholder:text-al-muted focus:outline-none focus:border-orange-500/50 transition-colors resize-none"
+                          />
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-                <p className="text-[11px] text-al-muted text-center">You can edit any subtask above before confirming.</p>
+                {!isMultiCoord && <p className="text-[11px] text-al-muted text-center">You can edit any subtask above before confirming.</p>}
               </div>
             ) : (
               <p className="text-sm text-al-muted py-4 text-center">Could not generate plan — skip to proceed without subtask assignment.</p>
@@ -2570,7 +2672,8 @@ export default function SessionRoomClient() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {showFailureModal && failedAgent && (
         <AgentFailureModal
