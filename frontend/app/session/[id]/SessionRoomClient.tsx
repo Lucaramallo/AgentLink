@@ -11,7 +11,7 @@ import PollCard, { type PollType } from "./PollCard";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const API = "http://192.168.0.122:8000/api/v1";
+const API = "http://192.168.0.116:8000/api/v1";
 const NR  = 40;
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
@@ -854,7 +854,7 @@ export default function SessionRoomClient() {
     let ws: WebSocket;
 
     try {
-      ws = new WebSocket(`ws://192.168.0.122:8000/ws/rooms/${roomId}`);
+      ws = new WebSocket(`ws://192.168.0.116:8000/ws/rooms/${roomId}`);
       wsRef.current = ws;
     } catch {
       return;

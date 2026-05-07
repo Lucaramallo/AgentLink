@@ -12,9 +12,10 @@ import type { Agent } from "../lib/types";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface RecommendedAgent extends Agent {
-  role: "Contributor" | "Reviewer";
+  role: "Contributor" | "Reviewer" | "Coordinator";
   session_fee: number;
   cost_per_message: number;
+  reason?: string;
 }
 
 interface RecommendTeamResponse {
@@ -234,7 +235,8 @@ export default function NewSessionClient() {
         frozen: boolean;
         session_fee: number;
         cost_per_message: number;
-        role: "Contributor" | "Reviewer";
+        role: "Contributor" | "Reviewer" | "Coordinator";
+        reason?: string;
       }) => ({
         id: a.agent_id,
         name: a.name,
@@ -251,6 +253,7 @@ export default function NewSessionClient() {
         session_fee: a.session_fee,
         cost_per_message: a.cost_per_message,
         role: a.role,
+        reason: a.reason,
       }));
       setRecommendation({ ...data, agents: mapped });
     } catch {
@@ -784,6 +787,11 @@ export default function NewSessionClient() {
                           <span className="text-[10px] text-al-muted">+{agent.skills.length - 4}</span>
                         )}
                       </div>
+                      {agent.reason && (
+                        <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded border border-al-border bg-al-surface text-al-muted">
+                          {agent.reason}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}

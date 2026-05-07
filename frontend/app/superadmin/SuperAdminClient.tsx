@@ -16,7 +16,7 @@ import {
   type AdminUser,
   type GlobalStats,
 } from "../lib/api";
-import { API_BASE } from "../lib/api";
+import { API_BASE, authFetch } from "../lib/api";
 
 type Tab = "stats" | "agents" | "users" | "sessions" | "moderation" | "dataset";
 
@@ -115,10 +115,9 @@ export default function SuperAdminClient() {
   async function fetchDataset() {
     setDatasetLoading(true);
     try {
-      const hdrs: HeadersInit = { "Content-Type": "application/json" };
       const [sRes, fRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/dataset/sessions?limit=200${datasetOutcomeFilter ? `&outcome=${datasetOutcomeFilter}` : ""}`, { headers: hdrs, credentials: "include" }),
-        fetch(`${API_BASE}/api/v1/dataset/feedback?limit=200`, { headers: hdrs, credentials: "include" }),
+        authFetch(`${API_BASE}/api/v1/dataset/sessions?limit=200${datasetOutcomeFilter ? `&outcome=${datasetOutcomeFilter}` : ""}`),
+        authFetch(`${API_BASE}/api/v1/dataset/feedback?limit=200`),
       ]);
       if (sRes.ok) setDatasetSessions((await sRes.json()).sessions ?? []);
       if (fRes.ok) setDatasetFeedback((await fRes.json()).feedback ?? []);
@@ -128,7 +127,7 @@ export default function SuperAdminClient() {
   }
 
   async function downloadDatasetExport() {
-    const res = await fetch(`${API_BASE}/api/v1/dataset/export`, { credentials: "include" });
+    const res = await authFetch(`${API_BASE}/api/v1/dataset/export`);
     if (!res.ok) return;
     const blob = new Blob([JSON.stringify(await res.json(), null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);

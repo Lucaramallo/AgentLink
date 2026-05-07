@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('rooms', sa.Column('dropped_agents', JSONB, nullable=True))
+    op.execute("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS dropped_agents JSONB")
     op.execute("ALTER TYPE roomoutcome ADD VALUE IF NOT EXISTS 'INCOMPLETE'")
 
 

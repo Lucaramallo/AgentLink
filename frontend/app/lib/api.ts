@@ -1,6 +1,6 @@
 import type { Agent } from "./types";
 
-export const API_BASE = "http://192.168.0.122:8000";
+export const API_BASE = "http://192.168.0.116:8000";
 
 // ── Auth helpers ───────────────────────────────────────────────────────────
 
@@ -393,7 +393,8 @@ export interface RecommendedAgentResult {
   frozen: boolean;
   session_fee: number;
   cost_per_message: number;
-  role: "Contributor" | "Reviewer";
+  role: "Contributor" | "Reviewer" | "Coordinator";
+  reason?: string;
 }
 
 export interface RecommendTeamResponse {

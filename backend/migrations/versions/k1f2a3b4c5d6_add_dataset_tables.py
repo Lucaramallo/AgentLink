@@ -8,20 +8,23 @@ Create Date: 2026-05-02
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID, ENUM as PGEnum
 
 revision = "k1f2a3b4c5d6"
 down_revision = "j0e1f2a3b4c5"
 branch_labels = None
 depends_on = None
 
+failurereason = PGEnum(
+    "AGENT_DID_NOT_UNDERSTAND", "AGENT_QUALITY_TOO_LOW", "SESSION_TOO_LONG",
+    "TECHNICAL_FAILURE", "TASK_TOO_COMPLEX", "REQUESTER_CHANGED_MIND", "OTHER",
+    name="failurereason",
+)
+
 
 def upgrade() -> None:
-    op.execute(
-        "CREATE TYPE failurereason AS ENUM ("
-        "'AGENT_DID_NOT_UNDERSTAND', 'AGENT_QUALITY_TOO_LOW', 'SESSION_TOO_LONG', "
-        "'TECHNICAL_FAILURE', 'TASK_TOO_COMPLEX', 'REQUESTER_CHANGED_MIND', 'OTHER')"
-    )
+    bind = op.get_bind()
+    failurereason.create(bind, checkfirst=True)
 
     op.create_table(
         "session_feedback",
@@ -36,7 +39,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "failure_reason",
-            sa.Enum(
+            PGEnum(
                 "AGENT_DID_NOT_UNDERSTAND", "AGENT_QUALITY_TOO_LOW", "SESSION_TOO_LONG",
                 "TECHNICAL_FAILURE", "TASK_TOO_COMPLEX", "REQUESTER_CHANGED_MIND", "OTHER",
                 name="failurereason", create_type=False,
@@ -125,4 +128,4 @@ def downgrade() -> None:
     op.drop_table("agent_dataset")
     op.drop_table("session_dataset")
     op.drop_table("session_feedback")
-    op.execute("DROP TYPE IF EXISTS failurereason")
+    failurereason.drop(op.get_bind(), checkfirst=True)
