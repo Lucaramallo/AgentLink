@@ -1,6 +1,7 @@
 """Coordinator service — autonomous task delegation plan generation."""
 
 import json
+import logging
 import re
 import uuid
 
@@ -10,6 +11,8 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.models.room import Room
+
+log = logging.getLogger(__name__)
 
 
 async def generate_coordinator_plan(
@@ -70,12 +73,16 @@ async def generate_coordinator_plan(
         "Respond ONLY with the JSON."
     )
 
-    response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=system,
-        messages=[{"role": "user", "content": user_msg}],
-    )
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+    except Exception as exc:
+        log.error("Coordinator Claude API call failed: %s", exc, exc_info=True)
+        raise
 
     text = next((b.text for b in response.content if b.type == "text"), "{}")
 

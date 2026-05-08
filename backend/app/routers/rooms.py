@@ -744,6 +744,8 @@ async def generate_coordinator_plan_endpoint(
         new_plan = await generate_coordinator_plan(db, room_id, agent_ids=payload.agent_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Coordinator plan generation failed: {exc}")
 
     # Merge into existing plan without overwriting existing assignments.
     room = await db.get(Room, room_id)

@@ -19,9 +19,9 @@ interface TeamTemplate {
   id: string;
   name: string;
   description: string | null;
-  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string }>;
+  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string | null; node_id?: string }>;
   edges: Array<{ from: string; to: string }>;
-  clusters: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number; subTask: string }>;
+  clusters: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number; subTask?: string }>;
   created_at: string;
 }
 
@@ -999,7 +999,7 @@ export default function SessionBuildClient() {
         description: templateDesc.trim() || null,
         agents: nodesRef.current
           .filter((n) => !n.isHuman)
-          .map((n) => ({ slug: n.agent.id, role: n.role, cluster_id: n.clusterId ?? null })),
+          .map((n) => ({ slug: n.agent.id, role: n.role, cluster_id: n.clusterId ?? null, node_id: n.id })),
         edges: connsRef.current.map((c) => ({ from: c.fromId, to: c.toId })),
         clusters: clustersRef.current.map((c) => ({
           id: c.id, name: c.name, color: c.color,
@@ -1028,24 +1028,25 @@ export default function SessionBuildClient() {
   }
 
   function applyTemplate(template: TeamTemplate) {
-    // Map slugs back to Agent objects from allAgents
     const newNodes: CanvasNode[] = [];
     const margin = 120;
     for (const ta of template.agents) {
       const agent = allAgents.find((a) => a.id === ta.slug);
       if (!agent) continue;
+      // Use stored node_id so saved edges still reference valid IDs.
+      // Fall back to a new ID for templates saved before node_id was added.
       const existingCount = newNodes.filter((n) => n.agent.id === agent.id).length;
-      const id = existingCount === 0 ? `node-${agent.id}-${Date.now()}` : `node-${agent.id}-${Date.now()}-${existingCount}`;
+      const id = ta.node_id ?? (existingCount === 0 ? `node-${agent.id}` : `node-${agent.id}-${existingCount}`);
       const x = margin + Math.random() * 600;
       const y = margin + Math.random() * 400;
       newNodes.push({ id, x, y, agent, role: ta.role, clusterId: ta.cluster_id ?? undefined });
     }
-    const newConns: Conn[] = template.edges.map((e, i) => ({
-      id: `tconn-${i}-${Date.now()}`,
-      fromId: e.from,
-      toId: e.to,
-    }));
-    const newClusters: Cluster[] = template.clusters.map((c) => ({ ...c }));
+    // Only restore edges where both endpoints were successfully loaded.
+    const nodeIdSet = new Set(newNodes.map((n) => n.id));
+    const newConns: Conn[] = template.edges
+      .filter((e) => nodeIdSet.has(e.from) && nodeIdSet.has(e.to))
+      .map((e, i) => ({ id: `tconn-${i}-${Date.now()}`, fromId: e.from, toId: e.to }));
+    const newClusters: Cluster[] = template.clusters.map((c) => ({ ...c, subTask: c.subTask ?? "" }));
     setNodes(newNodes);
     setConns(newConns);
     setClusters(newClusters);
@@ -1311,6 +1312,23 @@ export default function SessionBuildClient() {
           })),
         }),
       );
+
+      // Register session graph with backend for coordinator plan generation and turn order.
+      fetch(`${API_BASE}/rooms/${room_id}/session-graph`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agents: nodes.filter((n) => !n.isHuman).map((n) => ({
+            id: n.id,
+            name: n.agent.name,
+            role: n.role,
+            is_human: false,
+            cluster_id: n.clusterId ?? null,
+          })),
+          edges: conns.map((c) => ({ from: c.fromId, to: c.toId })),
+          thinking_timeout_secs: 60,
+        }),
+      }).catch(() => {});
 
       router.push(`/session/${room_id}`);
     } catch (err) {
