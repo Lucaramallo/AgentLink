@@ -793,15 +793,79 @@ async def update_coordinator_plan(
     payload: CoordinatorPlanUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    """Persist a (possibly human-edited) coordinator plan on the room."""
+    """Persist a (possibly human-edited) coordinator plan and insert it as an immutable SYSTEM message."""
     room = await db.get(Room, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found.")
-    room.coordinator_plan = {"assignments": payload.assignments, "summary": payload.summary}
+    plan = {"assignments": payload.assignments, "summary": payload.summary}
+    room.coordinator_plan = plan
     flag_modified(room, "coordinator_plan")
     await db.flush()
+
+    # Insert immutable signed SYSTEM message into the chat log
+    lines = ["**Coordinator Plan**", ""]
+    for a in payload.assignments:
+        agent_name = a.get("agent_name", a.get("agent_id", "?"))
+        subtask = a.get("subtask", "—")
+        lines.append(f"• **{agent_name}** → {subtask}")
+    if payload.summary:
+        lines = [f"*{payload.summary}*", ""] + lines
+    content = "\n".join(lines)
+    sig = sign_message(settings.server_signing_key, content)
+    msg = Message(
+        room_id=room_id,
+        sender_agent_id=_system_agent_id(room),
+        content_natural=content,
+        content_structured={"type": "coordinator_plan", "coordinator_plan": plan},
+        signature=sig,
+        message_type=MessageType.SYSTEM,
+    )
+    db.add(msg)
+    await db.flush()
     await db.commit()
-    return room.coordinator_plan
+
+    # Broadcast via WebSocket to all connected frontend clients
+    try:
+        from app.routers.websocket import manager as ws_manager
+        await ws_manager.broadcast(str(room_id), {
+            "type": "message",
+            "data": {
+                "id": str(msg.message_id),
+                "agentId": str(msg.sender_agent_id),
+                "agentName": "Coordinator",
+                "agentOrg": "AgentLink",
+                "role": "Coordinator",
+                "type": "SYSTEM",
+                "content": msg.content_natural,
+                "sigValid": True,
+                "ts": msg.timestamp.isoformat() if msg.timestamp else None,
+                "contentStructured": msg.content_structured,
+            },
+        })
+    except Exception:
+        pass
+
+    return plan
+
+
+class RoomPatch(BaseModel):
+    github_repo_url: str
+
+
+@router.patch("/{room_id}")
+async def patch_room(
+    room_id: uuid.UUID,
+    payload: RoomPatch,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Update mutable room fields. Currently supports github_repo_url."""
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    room.github_repo_url = payload.github_repo_url
+    await db.flush()
+    await db.commit()
+    return {"ok": True}
 
 
 # --- WebSocket ---

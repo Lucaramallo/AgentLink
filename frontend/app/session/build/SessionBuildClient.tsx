@@ -19,7 +19,7 @@ interface TeamTemplate {
   id: string;
   name: string;
   description: string | null;
-  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string | null; node_id?: string }>;
+  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string | null; node_id?: string; is_human?: boolean; x?: number; y?: number }>;
   edges: Array<{ from: string; to: string }>;
   clusters: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number; subTask?: string }>;
   created_at: string;
@@ -994,12 +994,17 @@ export default function SessionBuildClient() {
     setTemplateSaving(true);
     setTemplateSaveError(null);
     try {
+      const allTemplateAgents = nodesRef.current.map((n) => ({
+        slug: n.isHuman ? "human-owner" : n.agent.id,
+        role: n.role,
+        cluster_id: n.clusterId ?? null,
+        node_id: n.id,
+        ...(n.isHuman ? { is_human: true, x: n.x, y: n.y } : {}),
+      }));
       const body = {
         name: templateName.trim(),
         description: templateDesc.trim() || null,
-        agents: nodesRef.current
-          .filter((n) => !n.isHuman)
-          .map((n) => ({ slug: n.agent.id, role: n.role, cluster_id: n.clusterId ?? null, node_id: n.id })),
+        agents: allTemplateAgents,
         edges: connsRef.current.map((c) => ({ from: c.fromId, to: c.toId })),
         clusters: clustersRef.current.map((c) => ({
           id: c.id, name: c.name, color: c.color,
@@ -1031,6 +1036,13 @@ export default function SessionBuildClient() {
     const newNodes: CanvasNode[] = [];
     const margin = 120;
     for (const ta of template.agents) {
+      if (ta.is_human) {
+        // Restore the human node at its saved position (or a default)
+        const x = ta.x ?? margin + Math.random() * 600;
+        const y = ta.y ?? margin + Math.random() * 400;
+        newNodes.push({ id: "node-human-owner", x, y, agent: HUMAN_STUB, role: "Requester", isHuman: true });
+        continue;
+      }
       const agent = allAgents.find((a) => a.id === ta.slug);
       if (!agent) continue;
       // Use stored node_id so saved edges still reference valid IDs.
@@ -1785,7 +1797,7 @@ export default function SessionBuildClient() {
               onMouseDown={() => { setShowPicker(false); setPickerSearch(""); }}
             >
               <div
-                className="bg-al-surface border border-al-border rounded-2xl shadow-2xl w-80 max-h-[480px] flex flex-col"
+                className="bg-al-surface border border-al-border rounded-2xl shadow-2xl w-[440px] max-h-[540px] flex flex-col"
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-al-border">
@@ -1808,29 +1820,63 @@ export default function SessionBuildClient() {
                     className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
                   />
                 </div>
-                <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-0.5">
+                <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1.5">
                   {pickerAgents.length === 0 ? (
                     <p className="text-xs text-al-muted text-center py-8">
                       No agents match your search
                     </p>
                   ) : (
-                    pickerAgents.map((agent) => (
-                      <button
-                        key={agent.id}
-                        onClick={() => addAgent(agent)}
-                        className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-al-bg transition-colors text-left"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-al-accent/15 border border-al-accent/25 flex items-center justify-center flex-shrink-0">
-                          <span className="text-xs font-bold text-al-accent">{initials(agent.name)}</span>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-al-text truncate">{agent.name}</div>
-                          <div className="text-[11px] text-al-muted truncate">
-                            {agent.framework} · {agent.skills.slice(0, 2).join(", ")}
+                    pickerAgents.map((agent) => {
+                      const fee = agentSessionFee(agent.reputationTech, agent.reputationRel);
+                      const cpm = agentCostPerMessage(agent.reputationTech, agent.reputationRel);
+                      const rep = agent.reputationTech;
+                      const stars = rep !== null ? Math.round(rep) : null;
+                      return (
+                        <div
+                          key={agent.id}
+                          className="flex gap-3 p-3 rounded-xl border border-al-border/60 hover:border-al-accent/30 hover:bg-al-bg/60 transition-colors"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-al-accent/15 border border-al-accent/25 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <span className="text-xs font-bold text-al-accent">{initials(agent.name)}</span>
                           </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-baseline gap-2 mb-0.5">
+                              <span className="text-sm font-semibold text-al-text truncate">{agent.name}</span>
+                              <span className="text-[10px] text-al-muted-2 shrink-0">{agent.framework}</span>
+                            </div>
+                            {agent.description && (
+                              <p className="text-[11px] text-al-muted leading-snug mb-1.5 line-clamp-1">{agent.description}</p>
+                            )}
+                            {agent.skills.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mb-1.5">
+                                {agent.skills.slice(0, 4).map((s) => (
+                                  <span key={s} className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-al-accent/10 text-al-accent border border-al-accent/20">
+                                    {s}
+                                  </span>
+                                ))}
+                                {agent.skills.length > 4 && (
+                                  <span className="text-[9px] text-al-muted self-center">+{agent.skills.length - 4}</span>
+                                )}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-3 text-[10px] text-al-muted-2">
+                              <span>
+                                {stars !== null ? "★".repeat(stars) + "☆".repeat(5 - stars) : "—"}{" "}
+                                <span className="text-al-muted">{rep !== null ? rep.toFixed(1) : "No rating"}</span>
+                              </span>
+                              <span className="text-al-border">·</span>
+                              <span>{fee} ALC + {cpm} ALC/msg</span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => addAgent(agent)}
+                            className="shrink-0 self-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-al-accent/15 text-al-accent border border-al-accent/30 hover:bg-al-accent/25 transition-colors"
+                          >
+                            Add
+                          </button>
                         </div>
-                      </button>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>

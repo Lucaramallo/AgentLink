@@ -378,6 +378,9 @@ export default function SessionRoomClient() {
   const agentDisplayStatesRef = useRef<Record<string, AgentDisplayState>>({});
   useEffect(() => { agentDisplayStatesRef.current = agentDisplayStates; }, [agentDisplayStates]);
 
+  // Diagram panel visibility
+  const [diagramVisible, setDiagramVisible] = useState(true);
+
   // Animation tick — drives pulsing ring redraws while any agent is THINKING
   const [animTick, setAnimTick] = useState(0);
   const animFrameRef = useRef<number | null>(null);
@@ -1076,7 +1079,20 @@ export default function SessionRoomClient() {
     return [...agentList].sort((a, b) => priority(a.role) - priority(b.role));
   }
 
-  async function pushToGitHub() {
+  async function saveGithubRepoAndRetry(url: string) {
+    setSessionGithubRepo(url);
+    // PATCH the room so the URL is persisted for future pushes
+    try {
+      await fetch(`${API}/rooms/${roomId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ github_repo_url: url }),
+      });
+    } catch { /* non-fatal — push still proceeds with URL in state */ }
+    await pushToGitHub(url);
+  }
+
+  async function pushToGitHub(repoOverride?: string) {
     if (!deliverableMsg || !token) {
       setGithubPushError("You must be logged in to push to GitHub.");
       return;
@@ -1101,7 +1117,7 @@ export default function SessionRoomClient() {
           deliverable_content: deliverableMsg.content,
           session_log: sessionLog,
           agents_contributions: agentsContributions,
-          ...(sessionGithubRepo ? { github_repo_url: sessionGithubRepo } : {}),
+          ...((repoOverride ?? sessionGithubRepo) ? { github_repo_url: repoOverride ?? sessionGithubRepo } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1908,6 +1924,22 @@ export default function SessionRoomClient() {
           </Link>
           <span className="font-mono text-xs text-al-muted">{roomId}</span>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setDiagramVisible((v) => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-al-border text-al-muted hover:text-al-text hover:border-al-accent/40 transition-colors text-xs"
+              title={diagramVisible ? "Hide diagram" : "Show diagram"}
+            >
+              {diagramVisible ? (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M10 3L4 8l6 5" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M6 3l6 5-6 5" />
+                </svg>
+              )}
+              {diagramVisible ? "Hide diagram" : "Show diagram"}
+            </button>
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
               <span className="text-base leading-none">💰</span>
               <span className="text-sm font-semibold text-amber-400 tabular-nums">{balance} ALC</span>
@@ -1949,8 +1981,8 @@ export default function SessionRoomClient() {
         {/* ── Left: team graph (45%) ── */}
         <div
           ref={containerRef}
-          className="shrink-0 relative border-r border-al-border bg-al-surface overflow-hidden"
-          style={{ width: "45%" }}
+          className="shrink-0 relative border-r border-al-border bg-al-surface overflow-hidden transition-all duration-300"
+          style={{ width: diagramVisible ? "45%" : "0", minWidth: 0 }}
         >
           <canvas ref={canvasRef} style={{ display: "block" }} />
 
@@ -2721,6 +2753,7 @@ export default function SessionRoomClient() {
           githubDeliveryUrl={githubDeliveryUrl}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
           onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username ? pushToGitHub : undefined}
+          onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" && !user?.github_username ? saveGithubRepoAndRetry : undefined}
           githubPushError={githubPushError}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
@@ -2901,6 +2934,48 @@ function MessageBubble({
   useMarkdown?: boolean;
   onDownloadDeliverable?: (msg: Message) => void;
 }) {
+  // Special rendering for coordinator plan SYSTEM messages
+  if (msg.type === "SYSTEM" && (msg.contentStructured as Record<string, unknown> | undefined)?.type === "coordinator_plan") {
+    const plan = (msg.contentStructured as Record<string, unknown>)?.coordinator_plan as {
+      assignments?: Array<{ agent_id: string; agent_name: string; subtask: string }>;
+      summary?: string;
+    } | undefined;
+    const assignments = plan?.assignments ?? [];
+    return (
+      <div
+        className="rounded-xl p-4 flex flex-col gap-3"
+        style={{ background: "rgba(255,107,53,0.07)", border: "1px solid rgba(255,107,53,0.3)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-base">🧭</span>
+          <span className="text-sm font-bold text-white">Coordinator Plan</span>
+          <span className="ml-auto text-[10px] text-al-muted">{new Date(msg.ts).toLocaleTimeString()}</span>
+        </div>
+        {plan?.summary && (
+          <p className="text-xs text-al-muted leading-relaxed">{plan.summary}</p>
+        )}
+        <div className="flex flex-col gap-1.5">
+          {assignments.map((a) => (
+            <div key={a.agent_id} className="flex gap-2 text-xs">
+              <span className="font-semibold text-orange-300 shrink-0">{a.agent_name}</span>
+              <span className="text-al-muted-2">→</span>
+              <span className="text-al-text flex-1">{a.subtask}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 text-[10px]" style={{ color: msg.sigValid ? "#22C55E" : "#EF4444" }}>
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor">
+            {msg.sigValid
+              ? <path strokeLinecap="round" strokeWidth={1.5} d="M1.5 6l3 3 5.5-5.5" />
+              : <path strokeLinecap="round" strokeWidth={1.5} d="M2 2l8 8M10 2l-8 8" />
+            }
+          </svg>
+          {msg.sigValid ? "sig valid" : "sig invalid"}
+        </div>
+      </div>
+    );
+  }
+
   const rc  = msg.isHuman ? HUMAN_COLOR : (ROLE_COLOR[msg.role] ?? "#64748B");
   const mtc = MSG_COLOR[msg.type];
   const ini = msg.isHuman ? "YOU" : initials(msg.agentName);
@@ -3356,6 +3431,7 @@ function CloseModal({
   githubPushError,
   onDownloadDeliverable,
   onPushGitHub,
+  onSaveAndRetryGitHub,
   onDownload,
   onClose,
 }: {
@@ -3378,9 +3454,27 @@ function CloseModal({
   githubPushError?: string | null;
   onDownloadDeliverable?: (msg: Message) => void;
   onPushGitHub?: () => void;
+  onSaveAndRetryGitHub?: (url: string) => Promise<void>;
   onDownload: () => void;
   onClose: () => void;
 }) {
+  const [inlineRepo, setInlineRepo] = useState("");
+  const [inlineSaving, setInlineSaving] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+
+  async function handleSaveAndRetry() {
+    if (!inlineRepo.trim() || !onSaveAndRetryGitHub) return;
+    setInlineSaving(true);
+    setInlineError(null);
+    try {
+      await onSaveAndRetryGitHub(inlineRepo.trim());
+    } catch (err) {
+      setInlineError(err instanceof Error ? err.message : "Failed. Please try again.");
+    } finally {
+      setInlineSaving(false);
+    }
+  }
+
   const isSuccess    = outcome === "SUCCESS";
   const isIncomplete = outcome === "INCOMPLETE";
   const isCancelled  = outcome === "CANCELLED";
@@ -3616,9 +3710,30 @@ function CloseModal({
             )
           )}
           {!onPushGitHub && !githubConnected && outcome === "SUCCESS" && deliverable && (
-            <p className="text-center text-xs text-al-muted py-1">
-              Connect GitHub in your profile to push deliverables
-            </p>
+            <div className="flex flex-col gap-2">
+              <p className="text-center text-xs text-al-muted">
+                No GitHub account linked — enter a repo URL to push directly:
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={inlineRepo}
+                  onChange={(e) => setInlineRepo(e.target.value)}
+                  placeholder="https://github.com/user/repo"
+                  className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRetry(); }}
+                />
+                <button
+                  onClick={handleSaveAndRetry}
+                  disabled={inlineSaving || !inlineRepo.trim()}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
+                  style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
+                >
+                  {inlineSaving ? "…" : "Save & Retry"}
+                </button>
+              </div>
+              {inlineError && <p className="text-[10px] text-red-400">{inlineError}</p>}
+            </div>
           )}
           {githubPushError && (
             <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30">

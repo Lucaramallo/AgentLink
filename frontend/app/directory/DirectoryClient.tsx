@@ -2,10 +2,38 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { Agent, SessionAgent, SessionRole } from "../lib/types";
 import AgentCard from "../components/AgentCard";
 import BuildSessionPanel from "../components/BuildSessionPanel";
 import { useAuth } from "../lib/auth";
+
+const API_BASE = "http://192.168.0.108:8000/api/v1";
+
+interface TeamTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  agents: Array<{ slug: string; role: SessionRole; is_human?: boolean }>;
+  created_at: string;
+}
+
+function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("agentlink_token");
+}
+
+async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers as Record<string, string> | undefined),
+    },
+  });
+}
 
 const FRAMEWORKS = ["All", "Claude", "LangChain", "AutoGen", "Custom"];
 
@@ -19,6 +47,26 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
   const [sessionAgents, setSessionAgents] = useState<SessionAgent[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const { user, isAuthenticated, logout } = useAuth();
+  const router = useRouter();
+
+  // My Teams modal
+  const [showTeamsModal, setShowTeamsModal] = useState(false);
+  const [savedTemplates, setSavedTemplates] = useState<TeamTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+
+  async function openTeamsModal() {
+    if (!isAuthenticated) {
+      router.push(`/login?return_url=${encodeURIComponent("/directory")}`);
+      return;
+    }
+    setShowTeamsModal(true);
+    setTemplatesLoading(true);
+    try {
+      const res = await apiFetch("/team-templates");
+      if (res.ok) setSavedTemplates(await res.json());
+    } catch { /* ignore */ }
+    setTemplatesLoading(false);
+  }
 
   const filtered = useMemo(() => {
     return agents.filter((a) => {
@@ -132,7 +180,7 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
           </div>
 
           {/* Search + filters */}
-          <div className="flex flex-col sm:flex-row gap-3 mb-6">
+          <div className="flex flex-col sm:flex-row gap-3 mb-6 items-start sm:items-center">
             {/* Search */}
             <div className="relative flex-1 max-w-md">
               <svg
@@ -179,6 +227,18 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
                 </button>
               ))}
             </div>
+
+            {/* My Teams button */}
+            <button
+              onClick={openTeamsModal}
+              className="ml-auto shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-al-surface border border-al-border text-al-muted-2 hover:border-al-accent/40 hover:text-al-text transition-all"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                <rect x="2" y="3" width="12" height="10" rx="2" strokeWidth={1.5} />
+                <path strokeLinecap="round" strokeWidth={1.5} d="M5 7h6M5 10h4" />
+              </svg>
+              My Teams
+            </button>
           </div>
 
           {/* Results count */}
@@ -223,6 +283,77 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
           />
         </aside>
       </div>
+
+      {/* My Teams modal */}
+      {showTeamsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-md mx-4 rounded-2xl border border-al-border bg-al-surface p-6 flex flex-col gap-4 max-h-[80vh]">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-al-text">My Teams</h2>
+              <button onClick={() => setShowTeamsModal(false)} className="text-al-muted hover:text-al-text transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M3 3l10 10M13 3L3 13" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {templatesLoading ? (
+                <div className="flex items-center justify-center py-10 gap-2">
+                  <svg className="w-4 h-4 animate-spin text-al-accent" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  <span className="text-sm text-al-muted">Loading…</span>
+                </div>
+              ) : savedTemplates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
+                  <svg className="w-8 h-8 text-al-border" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth={1.5} />
+                    <path strokeLinecap="round" strokeWidth={1.5} d="M7 9h10M7 13h6" />
+                  </svg>
+                  <p className="text-sm text-al-muted font-medium">No saved teams yet.</p>
+                  <p className="text-xs text-al-muted-2">Build a session and save your team.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {savedTemplates.map((t) => {
+                    const agentCount = t.agents.filter((a) => !a.is_human).length;
+                    const roles = [...new Set(t.agents.filter((a) => !a.is_human).map((a) => a.role))];
+                    return (
+                      <div key={t.id} className="flex items-start justify-between gap-3 p-3 rounded-xl border border-al-border bg-al-bg">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-al-text truncate">{t.name}</p>
+                          {t.description && (
+                            <p className="text-[11px] text-al-muted-2 truncate mt-0.5">{t.description}</p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1 text-[10px] text-al-muted">
+                            <span>{agentCount} agent{agentCount !== 1 ? "s" : ""}</span>
+                            {roles.length > 0 && (
+                              <>
+                                <span className="text-al-border">·</span>
+                                <span>{roles.join(", ")}</span>
+                              </>
+                            )}
+                            <span className="text-al-border">·</span>
+                            <span>{new Date(t.created_at).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                        <Link
+                          href={`/session/build?template=${t.id}`}
+                          className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold bg-al-accent/15 text-al-accent border border-al-accent/30 hover:bg-al-accent/25 transition-colors whitespace-nowrap"
+                          onClick={() => setShowTeamsModal(false)}
+                        >
+                          Load in Builder →
+                        </Link>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mobile slide-over panel */}
       {panelOpen && (

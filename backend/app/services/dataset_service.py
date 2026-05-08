@@ -121,11 +121,18 @@ async def collect_session_data(
 
         # Round count — infer from SYSTEM messages: "Round N — ..."
         round_numbers: set[int] = set()
+        coordinator_had_plan = False
+        coordinator_plan_summary: str | None = None
         for m in messages:
             if m.message_type == MessageType.SYSTEM:
                 match = re.search(r"\bRound\s+(\d+)", m.content_natural or "", re.IGNORECASE)
                 if match:
                     round_numbers.add(int(match.group(1)))
+                # Detect coordinator plan messages
+                if (m.content_structured or {}).get("type") == "coordinator_plan":
+                    coordinator_had_plan = True
+                    if coordinator_plan_summary is None:
+                        coordinator_plan_summary = (m.content_natural or "")[:500]
         number_of_rounds_used = max(round_numbers) if round_numbers else 0
 
         # ── Polls ─────────────────────────────────────────────────────────────
@@ -189,6 +196,8 @@ async def collect_session_data(
                 had_human_node=had_human_node,
                 cluster_count=cluster_count,
                 edge_count=edge_count,
+                coordinator_had_plan=coordinator_had_plan,
+                coordinator_plan_summary=coordinator_plan_summary,
             )
             db.add(sd)
         else:
