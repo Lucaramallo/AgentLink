@@ -1254,10 +1254,12 @@ export default function SessionBuildClient() {
       });
       if (!signB.ok) throw new Error(`Failed to sign contract side B (${signB.status})`);
 
-      const roomRes = await fetch(
-        `${API_BASE}/rooms?contract_id=${contract_id}&agent_a_id=${agentAId}&agent_b_id=${agentBId}`,
-        { method: "POST" },
-      );
+      const roomUrl = new URL(`${API_BASE}/rooms`);
+      roomUrl.searchParams.set("contract_id", contract_id);
+      roomUrl.searchParams.set("agent_a_id", agentAId);
+      roomUrl.searchParams.set("agent_b_id", agentBId);
+      if (githubRepo.trim()) roomUrl.searchParams.set("github_repo_url", githubRepo.trim());
+      const roomRes = await fetch(roomUrl.toString(), { method: "POST" });
       if (!roomRes.ok) throw new Error(`Failed to open room (${roomRes.status})`);
       const { room_id } = await roomRes.json();
 

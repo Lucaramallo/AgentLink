@@ -498,7 +498,7 @@ export default function SessionRoomClient() {
     const totalChars = msg.content.length;
     const timer = setInterval(() => {
       setTypedChars((prev) => {
-        const next = prev + 10;
+        const next = prev + 13;
         if (next >= totalChars) {
           clearInterval(timer);
           setRevealedIds((rids) => new Set([...rids, typingMessageId]));
@@ -919,6 +919,8 @@ export default function SessionRoomClient() {
           setGraphEdges(edges);
           setParticipantCount(participants.length);
         }
+
+        if (room.github_repo_url) setSessionGithubRepo(room.github_repo_url);
 
         const contract = room.contract ?? room.room_contract ?? {};
         const deliverableSpec: string = contract.deliverable_spec ?? room.deliverable_spec ?? "";

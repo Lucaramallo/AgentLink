@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,6 +99,7 @@ async def get_room(
         "task_description": room.contract.task_description,
         "agent_a_id": str(room.agent_a_id),
         "agent_b_id": str(room.agent_b_id),
+        "github_repo_url": room.github_repo_url,
     }
 
 
@@ -173,6 +174,7 @@ async def open_room(
     agent_a_id: uuid.UUID,
     agent_b_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    github_repo_url: str | None = Query(None),
 ) -> dict:
     """Abre la sala cuando el contrato está firmado por ambos dueños."""
     contract = await db.get(RoomContract, contract_id)
@@ -180,7 +182,7 @@ async def open_room(
         raise HTTPException(status_code=404, detail="Contrato no encontrado.")
 
     try:
-        room = await create_room(db, agent_a_id, agent_b_id, contract)
+        room = await create_room(db, agent_a_id, agent_b_id, contract, github_repo_url=github_repo_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
