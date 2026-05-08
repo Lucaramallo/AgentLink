@@ -3040,13 +3040,18 @@ function MessageBubble({
               </div>
             );
           }
-          if (useMarkdown) {
+          if (useMarkdown || isTyping) {
             return (
-              <div
-                className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
-                style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-              />
+              <>
+                <div
+                  className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
+                  style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+                />
+                {isTyping && (
+                  <span className="animate-pulse ml-0.5">|</span>
+                )}
+              </>
             );
           }
           return (
@@ -3055,9 +3060,6 @@ function MessageBubble({
               style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
             >
               <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{content}</span>
-              {isTyping && (
-                <span className="animate-pulse text-al-accent ml-0.5" style={{ fontWeight: 300 }}>|</span>
-              )}
             </div>
           );
         })()}
