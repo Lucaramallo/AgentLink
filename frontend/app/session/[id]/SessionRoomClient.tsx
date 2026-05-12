@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { SessionRole } from "../../lib/types";
 import { useCredits } from "../../lib/credits";
@@ -304,7 +304,13 @@ export default function SessionRoomClient() {
   const { id } = useParams<{ id: string }>();
   const roomId = id ?? "";
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAuthenticated, loading: authLoading, user, token } = useAuth();
+
+  // Detect return from GitHub OAuth redirect (from close-modal step 1 push flow)
+  const [pendingGithubResume, setPendingGithubResume] = useState(
+    () => searchParams.get("resumeGithubPush") === "1"
+  );
 
   useEffect(() => {
     if (authLoading) return;
@@ -839,6 +845,18 @@ export default function SessionRoomClient() {
     }
   }, [messages]);
 
+  // ── Resume pending GitHub push after OAuth redirect ─────────────────────
+
+  useEffect(() => {
+    if (!pendingGithubResume) return;
+    if (!deliverableMsg) return;
+    if (outcome !== null) return;
+    if (status !== "CLOSED_SUCCESS") return;
+    setOutcome("SUCCESS");
+    setShowModal(true);
+    setPendingGithubResume(false);
+  }, [pendingGithubResume, deliverableMsg, outcome, status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Track unread messages per cluster ────────────────────────────────────
 
   useEffect(() => {
@@ -1152,6 +1170,7 @@ export default function SessionRoomClient() {
 
   async function callDemoAgents(humanText: string, sessionMessages: Message[]) {
     // All non-human, non-Observer agents (Coordinators now included)
+    console.log("[callDemoAgents] entry graphNodes:", graphNodesRef.current.map((n) => `${n.label}(role=${n.role},isBuilder=${n.isBuilder},isHuman=${n.isHuman})`));
     const allSessionAgents = sortAgentsByPriority(
       graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer")
     );
@@ -1462,18 +1481,24 @@ export default function SessionRoomClient() {
 
     // ── Final round: summaries → Builder assembles deliverable ────────────────
     addSystemMsg(`Round ${maxRounds} — Final round`);
-    const builderAgents = agents.filter((n) => n.isBuilder === true);
+    // Re-read from ref at final round — eliminates any stale-capture edge case
+    const finalRoundAllAgents = sortAgentsByPriority(
+      graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator")
+    );
+    const builderAgents = finalRoundAllAgents.filter((n) => n.isBuilder === true);
     const builderAgent = builderAgents.length > 0 ? builderAgents[builderAgents.length - 1] : null;
-    console.log("[DELIVERABLE] agents:", agents.map((n) => `${n.label}(isBuilder=${n.isBuilder})`));
+    console.log("[DELIVERABLE] finalRoundAllAgents:", finalRoundAllAgents.map((n) => `${n.label}(isBuilder=${n.isBuilder},role=${n.role})`));
     console.log("[DELIVERABLE] Builder detected:", builderAgent?.label ?? "none — last Contributor gets DELIVERABLE");
-    // Non-builder agents in final round: coordinators + contributors + reviewers
+    // Non-builder agents in final round: coordinators + all non-builders
     const nonBuilderFinalAgents = [
       ...coordinators,
-      ...agents.filter((n) => !n.isBuilder),
+      ...finalRoundAllAgents.filter((n) => !n.isBuilder),
     ];
+    // Fallback: no Builder → last Contributor (not just last sorted agent) gets DELIVERABLE
+    const lastContributor = [...finalRoundAllAgents].reverse().find((n) => n.role === "Contributor") ?? finalRoundAllAgents[finalRoundAllAgents.length - 1];
     const allFinalAgents = builderAgent
       ? [...nonBuilderFinalAgents, builderAgent]
-      : agents; // no Builder: all agents run, last one gets DELIVERABLE
+      : finalRoundAllAgents; // no Builder: all agents run, lastContributor gets DELIVERABLE
 
     resetRound(allFinalAgents, maxRounds);
 
@@ -1519,15 +1544,15 @@ export default function SessionRoomClient() {
       // No Builder: all agents run, last contributor gets DELIVERABLE
       for (let i = 0; i < allFinalAgents.length; i++) {
         const agent = allFinalAgents[i];
-        const isLast = i === allFinalAgents.length - 1;
+        const isDeliverable = agent.id === lastContributor?.id;
         markThinking(agent, maxRounds);
         const msg = await callAgent(
           agent,
-          isLast
-            ? `${finalBasePrompt} You are the last agent — synthesize all contributions into one cohesive final deliverable.`
+          isDeliverable
+            ? `${finalBasePrompt} You are the designated final agent — synthesize all contributions into one cohesive final deliverable.`
             : finalBasePrompt,
           getVisibleContext(agent, [...allMessages, ...finalRoundMsgs], `R${maxRounds}`),
-          isLast ? "DELIVERABLE" : "R3",
+          isDeliverable ? "DELIVERABLE" : "R3",
           undefined,
           maxRounds,
           maxRounds,
@@ -3589,14 +3614,14 @@ function CloseModal({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const { login, token: authToken } = useAuth();
+  const { token: authToken } = useAuth();
   const [inlineRepo, setInlineRepo] = useState("");
   const [inlineSaving, setInlineSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
 
-  async function handleOAuthConnect() {
+  async function handleOAuthRedirect() {
     if (!authToken) { setOauthError("You must be logged in."); return; }
     setOauthLoading(true);
     setOauthError(null);
@@ -3606,34 +3631,8 @@ function CloseModal({
       });
       if (!res.ok) throw new Error("Could not start GitHub OAuth.");
       const { url } = await res.json();
-
-      const popup = window.open(url, "github-oauth", "width=700,height=600,left=200,top=100");
-      if (!popup) { setOauthError("Popup blocked. Please allow popups for this site."); setOauthLoading(false); return; }
-
-      const onMessage = (e: MessageEvent) => {
-        if (e.origin !== window.location.origin) return;
-        if (e.data?.type === "github-oauth-success") {
-          window.removeEventListener("message", onMessage);
-          setOauthLoading(false);
-          if (e.data.token && e.data.user) {
-            login(e.data.token as string, e.data.user);
-          }
-        } else if (e.data?.type === "github-oauth-error") {
-          window.removeEventListener("message", onMessage);
-          setOauthError(e.data.error ?? "GitHub OAuth failed.");
-          setOauthLoading(false);
-        }
-      };
-      window.addEventListener("message", onMessage);
-
-      // Fallback: if popup closes without posting a message
-      const pollClosed = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(pollClosed);
-          window.removeEventListener("message", onMessage);
-          setOauthLoading(false);
-        }
-      }, 500);
+      sessionStorage.setItem("agentlink_pending_github_push", JSON.stringify({ roomId }));
+      window.location.href = url;
     } catch (err) {
       setOauthError(err instanceof Error ? err.message : "GitHub OAuth failed.");
       setOauthLoading(false);
@@ -3922,7 +3921,7 @@ function CloseModal({
                 Connect your GitHub account to push the deliverable to your repo.
               </p>
               <button
-                onClick={handleOAuthConnect}
+                onClick={handleOAuthRedirect}
                 disabled={oauthLoading}
                 className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                 style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}

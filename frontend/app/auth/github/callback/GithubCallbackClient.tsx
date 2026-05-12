@@ -41,6 +41,15 @@ export default function GithubCallbackClient() {
           window.close();
           return;
         }
+        // Redirect mode: check for pending GitHub push from close modal
+        const pendingRaw = sessionStorage.getItem("agentlink_pending_github_push");
+        if (pendingRaw) {
+          sessionStorage.removeItem("agentlink_pending_github_push");
+          try {
+            const { roomId } = JSON.parse(pendingRaw) as { roomId: string };
+            if (roomId) { router.push(`/session/${roomId}?resumeGithubPush=1`); return; }
+          } catch { /* fall through to /admin */ }
+        }
         router.push("/admin");
       })
       .catch((err) => {

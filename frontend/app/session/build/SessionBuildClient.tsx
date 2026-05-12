@@ -1591,11 +1591,10 @@ export default function SessionBuildClient() {
                 <button
                   type="button"
                   onClick={handleConnectGitHub}
-                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all"
                   style={{
                     color: githubUrlValid ? "#22C55E" : "var(--color-al-muted-2, #94A3B8)",
                     borderColor: githubUrlValid ? "rgba(34,197,94,0.4)" : "var(--color-al-border, #1E2D4A)",
-                    border: "1px solid",
                     background: githubUrlValid ? "rgba(34,197,94,0.08)" : "transparent",
                   }}
                 >
