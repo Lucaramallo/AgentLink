@@ -916,11 +916,32 @@ export default function SessionRoomClient() {
 
         if (cancelled) return;
 
-        if (participants.length > 1 && !savedGraphLoadedRef.current) {
-          const { nodes, edges } = buildGraph(participants);
-          setGraphNodes(nodes);
-          setGraphEdges(edges);
-          setParticipantCount(participants.length);
+        if (!savedGraphLoadedRef.current) {
+          // Prefer session_graph from backend (preserves roles, isBuilder, clusters)
+          const sg: { agents?: Array<{ id: string; name: string; role: SessionRole; is_human?: boolean; cluster_id?: string | null; is_builder?: boolean }>; edges?: Array<{ from: string; to: string }> } | null = room.session_graph ?? null;
+          if (sg?.agents && sg.agents.length > 0) {
+            const sgNodes: GraphNode[] = sg.agents.map((a, i) => ({
+              id: a.id,
+              x: 200 + (i % 4) * 160,
+              y: 200 + Math.floor(i / 4) * 140,
+              label: a.name,
+              role: a.role,
+              isHuman: a.is_human ?? false,
+              isBuilder: a.is_builder ?? false,
+              clusterId: a.cluster_id ?? undefined,
+            }));
+            const human: GraphNode = { id: "human", x: 100, y: 100, label: "YOU", role: "Requester", isHuman: true, isBuilder: false };
+            const allNodes = sgNodes.some((n) => n.isHuman) ? sgNodes : [human, ...sgNodes];
+            const sgEdges: GraphEdge[] = (sg.edges ?? []).map((e) => ({ fromId: e.from, toId: e.to }));
+            setGraphNodes(allNodes);
+            setGraphEdges(sgEdges);
+            setParticipantCount(allNodes.length);
+          } else if (participants.length > 1) {
+            const { nodes, edges } = buildGraph(participants);
+            setGraphNodes(nodes);
+            setGraphEdges(edges);
+            setParticipantCount(participants.length);
+          }
         }
 
         if (room.github_repo_url) setSessionGithubRepo(room.github_repo_url);
@@ -1089,15 +1110,6 @@ export default function SessionRoomClient() {
       });
     } catch { /* non-fatal — push still proceeds with URL in state */ }
     await pushToGitHub(url);
-  }
-
-  async function linkGitHubUsername(username: string): Promise<void> {
-    const res = await fetch(`${API}/auth/me`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ github_username: username }),
-    });
-    if (!res.ok) throw new Error("Failed to link GitHub account. Please try again.");
   }
 
   async function pushToGitHub(repoOverride?: string) {
@@ -1450,8 +1462,10 @@ export default function SessionRoomClient() {
 
     // ── Final round: summaries → Builder assembles deliverable ────────────────
     addSystemMsg(`Round ${maxRounds} — Final round`);
-    const builderAgents = agents.filter((n) => n.isBuilder);
+    const builderAgents = agents.filter((n) => n.isBuilder === true);
     const builderAgent = builderAgents.length > 0 ? builderAgents[builderAgents.length - 1] : null;
+    console.log("[DELIVERABLE] agents:", agents.map((n) => `${n.label}(isBuilder=${n.isBuilder})`));
+    console.log("[DELIVERABLE] Builder detected:", builderAgent?.label ?? "none — last Contributor gets DELIVERABLE");
     // Non-builder agents in final round: coordinators + contributors + reviewers
     const nonBuilderFinalAgents = [
       ...coordinators,
@@ -2855,7 +2869,6 @@ export default function SessionRoomClient() {
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
           onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username && !!sessionGithubRepo ? () => pushToGitHub() : undefined}
           onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" ? saveGithubRepoAndRetry : undefined}
-          onLinkGitHubUsername={linkGitHubUsername}
           githubPushError={githubPushError}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
@@ -3549,7 +3562,6 @@ function CloseModal({
   onDownloadDeliverable,
   onPushGitHub,
   onSaveAndRetryGitHub,
-  onLinkGitHubUsername,
   onDownload,
   onClose,
 }: {
@@ -3574,30 +3586,57 @@ function CloseModal({
   onDownloadDeliverable?: (msg: Message) => void;
   onPushGitHub?: () => void;
   onSaveAndRetryGitHub?: (url: string) => Promise<void>;
-  onLinkGitHubUsername?: (username: string) => Promise<void>;
   onDownload: () => void;
   onClose: () => void;
 }) {
+  const { login, token: authToken } = useAuth();
   const [inlineRepo, setInlineRepo] = useState("");
   const [inlineSaving, setInlineSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
-  // BUG C: username-link flow state
-  const [ghUsername, setGhUsername] = useState("");
-  const [ghUsernameSaving, setGhUsernameSaving] = useState(false);
-  const [ghUsernameError, setGhUsernameError] = useState<string | null>(null);
-  const [ghUsernameLinked, setGhUsernameLinked] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
-  async function handleLinkUsername() {
-    if (!ghUsername.trim() || !onLinkGitHubUsername) return;
-    setGhUsernameSaving(true);
-    setGhUsernameError(null);
+  async function handleOAuthConnect() {
+    if (!authToken) { setOauthError("You must be logged in."); return; }
+    setOauthLoading(true);
+    setOauthError(null);
     try {
-      await onLinkGitHubUsername(ghUsername.trim());
-      setGhUsernameLinked(true);
+      const res = await fetch(`${API}/auth/github`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) throw new Error("Could not start GitHub OAuth.");
+      const { url } = await res.json();
+
+      const popup = window.open(url, "github-oauth", "width=700,height=600,left=200,top=100");
+      if (!popup) { setOauthError("Popup blocked. Please allow popups for this site."); setOauthLoading(false); return; }
+
+      const onMessage = (e: MessageEvent) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "github-oauth-success") {
+          window.removeEventListener("message", onMessage);
+          setOauthLoading(false);
+          if (e.data.token && e.data.user) {
+            login(e.data.token as string, e.data.user);
+          }
+        } else if (e.data?.type === "github-oauth-error") {
+          window.removeEventListener("message", onMessage);
+          setOauthError(e.data.error ?? "GitHub OAuth failed.");
+          setOauthLoading(false);
+        }
+      };
+      window.addEventListener("message", onMessage);
+
+      // Fallback: if popup closes without posting a message
+      const pollClosed = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(pollClosed);
+          window.removeEventListener("message", onMessage);
+          setOauthLoading(false);
+        }
+      }, 500);
     } catch (err) {
-      setGhUsernameError(err instanceof Error ? err.message : "Failed to link. Please try again.");
-    } finally {
-      setGhUsernameSaving(false);
+      setOauthError(err instanceof Error ? err.message : "GitHub OAuth failed.");
+      setOauthLoading(false);
     }
   }
 
@@ -3849,7 +3888,7 @@ function CloseModal({
               {githubPushing ? "Pushing to GitHub…" : "Push to GitHub"}
             </button>
           )}
-          {/* BUG B fix: connected but no repo URL — show repo input first */}
+          {/* Step 2: GitHub connected but no repo URL — enter repo to push */}
           {!githubDeliveryUrl && !onPushGitHub && githubConnected && !githubRepoUrl && outcome === "SUCCESS" && deliverable && (
             <div className="flex flex-col gap-2">
               <p className="text-center text-xs text-al-muted">
@@ -3876,60 +3915,31 @@ function CloseModal({
               {inlineError && <p className="text-[10px] text-red-400">{inlineError}</p>}
             </div>
           )}
-          {/* BUG C fix: GitHub account not linked — step 1: username, step 2: repo */}
-          {!githubDeliveryUrl && !githubConnected && outcome === "SUCCESS" && deliverable && (
+          {/* Step 1: GitHub not connected — OAuth popup to connect account */}
+          {!githubDeliveryUrl && !onPushGitHub && !githubConnected && outcome === "SUCCESS" && deliverable && (
             <div className="flex flex-col gap-2">
-              {!ghUsernameLinked ? (
-                <>
-                  <p className="text-center text-xs text-al-muted">
-                    Your AgentLink account is not linked to GitHub. Enter your GitHub username to enable push.
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={ghUsername}
-                      onChange={(e) => setGhUsername(e.target.value)}
-                      placeholder="github-username"
-                      className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
-                      onKeyDown={(e) => { if (e.key === "Enter") handleLinkUsername(); }}
-                    />
-                    <button
-                      onClick={handleLinkUsername}
-                      disabled={ghUsernameSaving || !ghUsername.trim()}
-                      className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
-                      style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
-                    >
-                      {ghUsernameSaving ? "…" : "Link"}
-                    </button>
-                  </div>
-                  {ghUsernameError && <p className="text-[10px] text-red-400">{ghUsernameError}</p>}
-                </>
-              ) : (
-                <>
-                  <p className="text-center text-xs text-green-400">
-                    GitHub account linked as <strong>{ghUsername}</strong>. Now enter your repo URL:
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={inlineRepo}
-                      onChange={(e) => setInlineRepo(e.target.value)}
-                      placeholder="https://github.com/user/repo"
-                      className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
-                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRetry(); }}
-                    />
-                    <button
-                      onClick={handleSaveAndRetry}
-                      disabled={inlineSaving || !inlineRepo.trim()}
-                      className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
-                      style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
-                    >
-                      {inlineSaving ? "…" : "Save & Push"}
-                    </button>
-                  </div>
-                  {inlineError && <p className="text-[10px] text-red-400">{inlineError}</p>}
-                </>
-              )}
+              <p className="text-center text-xs text-al-muted">
+                Connect your GitHub account to push the deliverable to your repo.
+              </p>
+              <button
+                onClick={handleOAuthConnect}
+                disabled={oauthLoading}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
+              >
+                {oauthLoading ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
+                  </svg>
+                )}
+                {oauthLoading ? "Connecting…" : "Connect with GitHub"}
+              </button>
+              {oauthError && <p className="text-[10px] text-red-400">{oauthError}</p>}
             </div>
           )}
           {githubPushError && (

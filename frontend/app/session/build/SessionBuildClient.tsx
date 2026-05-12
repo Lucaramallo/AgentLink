@@ -246,6 +246,8 @@ export default function SessionBuildClient() {
 
   // Attachments & GitHub
   const [githubRepo, setGithubRepo] = useState("");
+  const [githubUrlValid, setGithubUrlValid] = useState(false);
+  const [githubUrlError, setGithubUrlError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [restoredFileNames, setRestoredFileNames] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -674,6 +676,23 @@ export default function SessionBuildClient() {
 
     ctx.restore();
   }, [nodes, conns, clusters, hoveredNode, hoveredEdge, hoveredConn, hoveredCluster, editingClusterName, linking, linkCursor, canvasW, canvasH, zoom, pan]);
+
+  // ── GitHub URL validation ────────────────────────────────────────────────
+
+  function handleConnectGitHub() {
+    if (!githubRepo.trim()) {
+      setGithubUrlError("Please enter a GitHub repository URL");
+      setGithubUrlValid(false);
+      return;
+    }
+    if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+/.test(githubRepo.trim())) {
+      setGithubUrlError("Please enter a valid GitHub repo URL (https://github.com/user/repo)");
+      setGithubUrlValid(false);
+      return;
+    }
+    setGithubUrlError(null);
+    setGithubUrlValid(true);
+  }
 
   // ── Canvas helpers ───────────────────────────────────────────────────────
 
@@ -1339,6 +1358,7 @@ export default function SessionBuildClient() {
             role: n.role,
             is_human: false,
             cluster_id: n.clusterId ?? null,
+            is_builder: n.isBuilder ?? false,
           })),
           edges: conns.map((c) => ({ from: c.fromId, to: c.toId })),
           thinking_timeout_secs: 60,
@@ -1552,12 +1572,43 @@ export default function SessionBuildClient() {
             )}
 
             {/* GitHub repo */}
-            <input
-              value={githubRepo}
-              onChange={(e) => setGithubRepo(e.target.value)}
-              placeholder="🔗 Link a GitHub repo (optional) — https://github.com/user/repo"
-              className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-2 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
-            />
+            <div className="flex flex-col gap-1">
+              <div className="flex gap-2">
+                <input
+                  value={githubRepo}
+                  onChange={(e) => {
+                    setGithubRepo(e.target.value);
+                    setGithubUrlValid(false);
+                    setGithubUrlError(null);
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleConnectGitHub(); }}
+                  placeholder="🔗 Link a GitHub repo (optional) — https://github.com/user/repo"
+                  className="flex-1 bg-al-bg rounded-lg px-3 py-2 text-xs text-al-text placeholder:text-al-muted focus:outline-none transition-colors"
+                  style={{
+                    border: `1px solid ${githubUrlValid ? "rgba(34,197,94,0.6)" : githubUrlError ? "rgba(239,68,68,0.5)" : "var(--color-al-border, #1E2D4A)"}`,
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleConnectGitHub}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    color: githubUrlValid ? "#22C55E" : "var(--color-al-muted-2, #94A3B8)",
+                    borderColor: githubUrlValid ? "rgba(34,197,94,0.4)" : "var(--color-al-border, #1E2D4A)",
+                    border: "1px solid",
+                    background: githubUrlValid ? "rgba(34,197,94,0.08)" : "transparent",
+                  }}
+                >
+                  {githubUrlValid ? "✓ Connected" : "Connect"}
+                </button>
+              </div>
+              {githubUrlError && (
+                <p className="text-xs text-red-400 mt-0.5">{githubUrlError}</p>
+              )}
+              {githubUrlValid && (
+                <p className="text-xs text-green-400 mt-0.5">Repository URL saved — will be linked to this session.</p>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -31,10 +31,27 @@ export default function GithubCallbackClient() {
         if (data.token) {
           localStorage.setItem("agentlink_token", data.token);
         }
-        setMessage("GitHub connected! Redirecting…");
+        setMessage("GitHub connected!");
+        // Popup mode: notify opener and close
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(
+            { type: "github-oauth-success", token: data.token, user: data.user },
+            window.location.origin,
+          );
+          window.close();
+          return;
+        }
         router.push("/admin");
       })
       .catch((err) => {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(
+            { type: "github-oauth-error", error: err.message },
+            window.location.origin,
+          );
+          window.close();
+          return;
+        }
         setMessage(`Error: ${err.message}. Redirecting…`);
         setTimeout(() => router.push("/admin"), 2000);
       });

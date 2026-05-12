@@ -100,6 +100,7 @@ async def get_room(
         "agent_a_id": str(room.agent_a_id),
         "agent_b_id": str(room.agent_b_id),
         "github_repo_url": room.github_repo_url,
+        "session_graph": room.session_graph,
     }
 
 
