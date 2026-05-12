@@ -52,6 +52,7 @@ class DemoRequest(BaseModel):
     max_rounds: int | None = None
     team_agents: list[dict] | None = None
     rn_context: str | None = None
+    is_builder: bool = False
 
 
 class DemoResponse(BaseModel):
@@ -229,6 +230,7 @@ async def agent_respond(
             max_rounds=payload.max_rounds,
             team_agents=payload.team_agents,
             rn_context=payload.rn_context,
+            is_builder=payload.is_builder,
         )
 
         agent = AGENTS[agent_id]

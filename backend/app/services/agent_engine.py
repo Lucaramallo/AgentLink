@@ -89,6 +89,7 @@ def build_role_system_prompt(
     max_rounds: int,
     team_agents: list[dict] | None = None,
     rn_context: str | None = None,
+    is_builder: bool = False,
 ) -> str:
     """Return a role+round-specific instruction block appended to the base persona prompt."""
     is_final = round_number >= max_rounds
@@ -106,7 +107,22 @@ def build_role_system_prompt(
 
     r = role.lower()
 
-    if r == "coordinator":
+    if r == "coordinator" and is_builder and is_final:
+        rn_block = ""
+        if rn_context:
+            rn_block = f"\n\nTeam summaries for assembly:\n\n{rn_context}"
+        instructions = (
+            "You are both the Coordinator and the Builder for this session. In this final round:\n"
+            "1. First, as Coordinator: verify that all Contributors have delivered their summaries "
+            "and the Reviewer has completed their assessment. Confirm the team is ready.\n"
+            "2. Then, as Builder: using your specialty and ALL the summaries and assessments "
+            "provided below as context, assemble the final deliverable. This is your primary "
+            "output — produce the complete, polished deliverable now.\n"
+            "3. Mark your message as DELIVERABLE.\n"
+            f"{rn_block}"
+        )
+
+    elif r == "coordinator":
         if round_number == 1:
             instructions = (
                 "You are the COORDINATOR for this session. In Round 1 you must: "
@@ -207,6 +223,7 @@ async def get_agent_response(
     max_rounds: int | None = None,
     team_agents: list[dict] | None = None,
     rn_context: str | None = None,
+    is_builder: bool = False,
 ) -> str:
     """Call the Claude API as the specified agent and return its response."""
     agent = AGENTS.get(agent_id)
@@ -257,6 +274,7 @@ async def get_agent_response(
                 max_rounds=max_rounds,
                 team_agents=team_agents,
                 rn_context=rn_context,
+                is_builder=is_builder,
             )
     if subtask:
         system = f"{system}\n\nYour assigned subtask for this session: {subtask}"

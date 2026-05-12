@@ -1326,6 +1326,7 @@ export default function SessionRoomClient() {
             ...(roundNum != null ? { round_number: roundNum } : {}),
             ...(maxRnds != null ? { max_rounds: maxRnds } : {}),
             ...(rnCtx ? { rn_context: rnCtx } : {}),
+            ...(agent.isBuilder ? { is_builder: true } : {}),
           }),
         });
 
@@ -1485,13 +1486,16 @@ export default function SessionRoomClient() {
     const finalRoundAllAgents = sortAgentsByPriority(
       graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator")
     );
-    const builderAgents = finalRoundAllAgents.filter((n) => n.isBuilder === true);
+    const builderAgents = [
+      ...finalRoundAllAgents.filter((n) => n.isBuilder === true),
+      ...coordinators.filter((n) => n.isBuilder === true),
+    ];
     const builderAgent = builderAgents.length > 0 ? builderAgents[builderAgents.length - 1] : null;
     console.log("[DELIVERABLE] finalRoundAllAgents:", finalRoundAllAgents.map((n) => `${n.label}(isBuilder=${n.isBuilder},role=${n.role})`));
     console.log("[DELIVERABLE] Builder detected:", builderAgent?.label ?? "none — last Contributor gets DELIVERABLE");
-    // Non-builder agents in final round: coordinators + all non-builders
+    // Non-builder agents in final round: non-builder coordinators + all non-builders
     const nonBuilderFinalAgents = [
-      ...coordinators,
+      ...coordinators.filter((n) => !n.isBuilder),
       ...finalRoundAllAgents.filter((n) => !n.isBuilder),
     ];
     // Fallback: no Builder → last Contributor (not just last sorted agent) gets DELIVERABLE
