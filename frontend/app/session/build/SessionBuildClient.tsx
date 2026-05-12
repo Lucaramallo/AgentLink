@@ -19,7 +19,7 @@ interface TeamTemplate {
   id: string;
   name: string;
   description: string | null;
-  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string | null; node_id?: string; is_human?: boolean; x?: number; y?: number }>;
+  agents: Array<{ slug: string; role: SessionRole; cluster_id?: string | null; node_id?: string; is_human?: boolean; is_builder?: boolean; x?: number; y?: number }>;
   edges: Array<{ from: string; to: string }>;
   clusters: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number; subTask?: string }>;
   created_at: string;
@@ -999,7 +999,10 @@ export default function SessionBuildClient() {
         role: n.role,
         cluster_id: n.clusterId ?? null,
         node_id: n.id,
-        ...(n.isHuman ? { is_human: true, x: n.x, y: n.y } : {}),
+        is_builder: n.isBuilder ?? false,
+        x: n.x,
+        y: n.y,
+        ...(n.isHuman ? { is_human: true } : {}),
       }));
       const body = {
         name: templateName.trim(),
@@ -1049,9 +1052,9 @@ export default function SessionBuildClient() {
       // Fall back to a new ID for templates saved before node_id was added.
       const existingCount = newNodes.filter((n) => n.agent.id === agent.id).length;
       const id = ta.node_id ?? (existingCount === 0 ? `node-${agent.id}` : `node-${agent.id}-${existingCount}`);
-      const x = margin + Math.random() * 600;
-      const y = margin + Math.random() * 400;
-      newNodes.push({ id, x, y, agent, role: ta.role, clusterId: ta.cluster_id ?? undefined });
+      const x = ta.x ?? margin + Math.random() * 600;
+      const y = ta.y ?? margin + Math.random() * 400;
+      newNodes.push({ id, x, y, agent, role: ta.role, clusterId: ta.cluster_id ?? undefined, isBuilder: ta.is_builder ?? false });
     }
     // Only restore edges where both endpoints were successfully loaded.
     const nodeIdSet = new Set(newNodes.map((n) => n.id));

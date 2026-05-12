@@ -501,7 +501,7 @@ export default function SessionRoomClient() {
     const totalChars = msg.content.length;
     const timer = setInterval(() => {
       setTypedChars((prev) => {
-        const next = prev + 13;
+        const next = prev + 16;
         if (next >= totalChars) {
           clearInterval(timer);
           setRevealedIds((rids) => new Set([...rids, typingMessageId]));
@@ -1081,7 +1081,6 @@ export default function SessionRoomClient() {
 
   async function saveGithubRepoAndRetry(url: string) {
     setSessionGithubRepo(url);
-    // PATCH the room so the URL is persisted for future pushes
     try {
       await fetch(`${API}/rooms/${roomId}`, {
         method: "PATCH",
@@ -1090,6 +1089,15 @@ export default function SessionRoomClient() {
       });
     } catch { /* non-fatal — push still proceeds with URL in state */ }
     await pushToGitHub(url);
+  }
+
+  async function linkGitHubUsername(username: string): Promise<void> {
+    const res = await fetch(`${API}/auth/me`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ github_username: username }),
+    });
+    if (!res.ok) throw new Error("Failed to link GitHub account. Please try again.");
   }
 
   async function pushToGitHub(repoOverride?: string) {
@@ -1131,13 +1139,15 @@ export default function SessionRoomClient() {
   }
 
   async function callDemoAgents(humanText: string, sessionMessages: Message[]) {
-    const agents = sortAgentsByPriority(
-      graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator")
+    // All non-human, non-Observer agents (Coordinators now included)
+    const allSessionAgents = sortAgentsByPriority(
+      graphNodesRef.current.filter((n) => !n.isHuman && n.role !== "Observer")
     );
-    if (agents.length === 0) return;
+    const coordinators = allSessionAgents.filter((n) => n.role === "Coordinator");
+    const agents = allSessionAgents.filter((n) => n.role !== "Coordinator");
+    if (agents.length === 0 && coordinators.length === 0) return;
 
     // ── Coordinator pre-round plan ─────────────────────────────────────────
-    const coordinators = graphNodesRef.current.filter((n) => n.role === "Coordinator");
     if (coordinators.length > 0) {
       setCoordinatorPlanLoading(true);
       setShowCoordinatorPlan(true);
@@ -1182,10 +1192,6 @@ export default function SessionRoomClient() {
     }
 
     const maxRounds = maxRoundsRef.current;
-    const builderAgents = agents.filter((n) => n.isBuilder);
-    // Final round: builders only if any are designated, otherwise all agents
-    const finalRoundAgents = sortAgentsByPriority(builderAgents.length > 0 ? builderAgents : agents);
-
     roundsCompletedRef.current = 0;
 
     function addSystemMsg(content: string) {
@@ -1254,12 +1260,18 @@ export default function SessionRoomClient() {
       return visible;
     }
 
+    // Team metadata sent to API for role-aware system prompts
+    const teamAgentsForApi = allSessionAgents.map((n) => ({ name: n.label, role: n.role }));
+
     async function callAgent(
       agent: GraphNode,
       prompt: string,
       context: Message[],
       type: MessageType,
       subtask?: string,
+      roundNum?: number,
+      maxRnds?: number,
+      rnCtx?: string,
     ): Promise<Message | null> {
       if (isPausedRef.current) return null;
       // Skip agents already dropped from this session
@@ -1278,7 +1290,11 @@ export default function SessionRoomClient() {
             agent_id: agentIdToSend,
             acting_as: { name: agent.label, role: agent.role },
             session_messages: context,
+            team_agents: teamAgentsForApi,
             ...(subtask ? { subtask } : {}),
+            ...(roundNum != null ? { round_number: roundNum } : {}),
+            ...(maxRnds != null ? { max_rounds: maxRnds } : {}),
+            ...(rnCtx ? { rn_context: rnCtx } : {}),
           }),
         });
 
@@ -1358,22 +1374,49 @@ export default function SessionRoomClient() {
       for (const a of agentList) postRoundState(a.id, "PENDING", round);
     };
 
-    // ── ROUND 1: Independent analysis (parallel) ──────────────────────────────
+    // ── ROUND 1: Independent analysis ────────────────────────────────────────
+    // Coordinators go first (sequential), then workers parallel, then reviewers
     addSystemMsg("Round 1 — Independent analysis");
-    resetRound(agents, 1);
-    const r1Prompt =
-      `${humanText}\n\nRound 1: Provide your independent expert analysis. Do not hold back your perspective.`;
     const plan = coordinatorPlanRef.current;
-    const r1Results = await Promise.all(
-      agents.map(async (agent) => {
+    const allR1Agents = [...coordinators, ...agents];
+    resetRound(allR1Agents, 1);
+
+    const r1Prompt = `${humanText}\n\nRound 1: Provide your independent expert analysis. Do not hold back your perspective.`;
+
+    // Coordinators sequential first
+    const r1CoordMsgs: Message[] = [];
+    for (const coord of coordinators) {
+      markThinking(coord, 1);
+      const msg = await callAgent(coord, r1Prompt, getVisibleContext(coord, sessionMessages, "R1"), "R1", undefined, 1, maxRounds);
+      markDone(coord, msg, 1);
+      if (msg) r1CoordMsgs.push(msg);
+    }
+
+    // Workers (contributors + builders) in parallel, reviewers after
+    const workers = agents.filter((n) => n.role === "Contributor" || n.isBuilder);
+    const reviewers = agents.filter((n) => n.role === "Reviewer");
+    const r1WorkerContext = [...sessionMessages, ...r1CoordMsgs];
+    const r1WorkerResults = await Promise.all(
+      workers.map(async (agent) => {
         markThinking(agent, 1);
         const subtask = plan?.assignments.find((a) => a.agent_id === agent.id || a.agent_name === agent.label)?.subtask;
-        const msg = await callAgent(agent, r1Prompt, getVisibleContext(agent, sessionMessages, "R1"), "R1", subtask);
+        const msg = await callAgent(agent, r1Prompt, getVisibleContext(agent, r1WorkerContext, "R1"), "R1", subtask, 1, maxRounds);
         markDone(agent, msg, 1);
         return msg;
       }),
     );
-    const r1Messages = r1Results.filter((m): m is Message => m !== null);
+    const r1WorkerMsgs = r1WorkerResults.filter((m): m is Message => m !== null);
+
+    const r1ReviewerBase = [...r1WorkerContext, ...r1WorkerMsgs];
+    const r1ReviewerMsgs: Message[] = [];
+    for (const rev of reviewers) {
+      markThinking(rev, 1);
+      const msg = await callAgent(rev, r1Prompt, getVisibleContext(rev, [...r1ReviewerBase, ...r1ReviewerMsgs], "R1"), "R1", undefined, 1, maxRounds);
+      markDone(rev, msg, 1);
+      if (msg) r1ReviewerMsgs.push(msg);
+    }
+
+    const r1Messages = [...r1CoordMsgs, ...r1WorkerMsgs, ...r1ReviewerMsgs];
     roundsCompletedRef.current = 1;
     if (r1Messages.length === 0) return;
 
@@ -1382,18 +1425,21 @@ export default function SessionRoomClient() {
     // ── ROUNDS 2 through maxRounds-1: Cross-review (sequential) ──────────────
     for (let round = 2; round < maxRounds; round++) {
       addSystemMsg(`Round ${round} — Cross-review`);
-      resetRound(agents, round);
-      const roundPrompt =
-        `Round ${round}: You have read your colleagues' analyses. Identify where you agree, where you disagree, and refine your position. Be specific about what you accept or challenge from others.`;
+      const allRoundAgents = [...coordinators, ...agents];
+      resetRound(allRoundAgents, round);
+      const roundPrompt = `Round ${round}: You have read your colleagues' analyses. Identify where you agree, where you disagree, and refine your position. Be specific about what you accept or challenge from others.`;
       const roundMsgs: Message[] = [];
+
+      // Coordinators first
+      for (const coord of coordinators) {
+        markThinking(coord, round);
+        const msg = await callAgent(coord, roundPrompt, getVisibleContext(coord, [...allMessages, ...roundMsgs], `R${round}`), "R2", undefined, round, maxRounds);
+        markDone(coord, msg, round);
+        if (msg) roundMsgs.push(msg);
+      }
       for (const agent of agents) {
         markThinking(agent, round);
-        const msg = await callAgent(
-          agent,
-          roundPrompt,
-          getVisibleContext(agent, [...allMessages, ...roundMsgs], `R${round}`),
-          "R2",
-        );
+        const msg = await callAgent(agent, roundPrompt, getVisibleContext(agent, [...allMessages, ...roundMsgs], `R${round}`), "R2", undefined, round, maxRounds);
         markDone(agent, msg, round);
         if (msg) roundMsgs.push(msg);
       }
@@ -1402,27 +1448,81 @@ export default function SessionRoomClient() {
       if (roundMsgs.length === 0) return;
     }
 
-    // ── Final round: Consensus and deliverable (sequential, builders only) ────
-    addSystemMsg(`Round ${maxRounds} — Consensus and deliverable`);
-    resetRound(finalRoundAgents, maxRounds);
-    const finalPrompt =
-      `Round ${maxRounds} (final): Based on all previous discussion, contribute your section to the unified team deliverable. The last agent should synthesize everything into one cohesive document.`;
-    for (let i = 0; i < finalRoundAgents.length; i++) {
-      const agent = finalRoundAgents[i];
-      markThinking(agent, maxRounds);
-      const isLast = i === finalRoundAgents.length - 1;
-      const prompt = isLast
-        ? `${finalPrompt} You are the last agent — synthesize all contributions into one cohesive final document.`
-        : finalPrompt;
-      const msg = await callAgent(
-        agent,
-        prompt,
-        getVisibleContext(agent, allMessages, `R${maxRounds}`),
-        isLast ? "DELIVERABLE" : "R3",
+    // ── Final round: summaries → Builder assembles deliverable ────────────────
+    addSystemMsg(`Round ${maxRounds} — Final round`);
+    const builderAgents = agents.filter((n) => n.isBuilder);
+    const builderAgent = builderAgents.length > 0 ? builderAgents[builderAgents.length - 1] : null;
+    // Non-builder agents in final round: coordinators + contributors + reviewers
+    const nonBuilderFinalAgents = [
+      ...coordinators,
+      ...agents.filter((n) => !n.isBuilder),
+    ];
+    const allFinalAgents = builderAgent
+      ? [...nonBuilderFinalAgents, builderAgent]
+      : agents; // no Builder: all agents run, last one gets DELIVERABLE
+
+    resetRound(allFinalAgents, maxRounds);
+
+    const finalBasePrompt = `Round ${maxRounds} (final): This is the last round. Deliver your role-specific final output.`;
+    const finalRoundMsgs: Message[] = [];
+
+    if (builderAgent) {
+      // Run non-builders first to collect summaries for rn_context
+      for (const agent of nonBuilderFinalAgents) {
+        markThinking(agent, maxRounds);
+        const msg = await callAgent(
+          agent,
+          finalBasePrompt,
+          getVisibleContext(agent, [...allMessages, ...finalRoundMsgs], `R${maxRounds}`),
+          "R3",
+          undefined,
+          maxRounds,
+          maxRounds,
+        );
+        markDone(agent, msg, maxRounds);
+        if (msg) finalRoundMsgs.push(msg);
+      }
+      // Build rn_context for Builder
+      const rnContext = finalRoundMsgs
+        .map((m) => `[${m.agentName ?? "Agent"}] (${m.role}) summary:\n${m.content}\n\n---`)
+        .join("\n\n");
+
+      // Builder runs last with full rn_context
+      markThinking(builderAgent, maxRounds);
+      const builderMsg = await callAgent(
+        builderAgent,
+        finalBasePrompt,
+        getVisibleContext(builderAgent, [...allMessages, ...finalRoundMsgs], `R${maxRounds}`),
+        "DELIVERABLE",
+        undefined,
+        maxRounds,
+        maxRounds,
+        rnContext,
       );
-      markDone(agent, msg, maxRounds);
-      if (msg) allMessages = [...allMessages, msg];
+      markDone(builderAgent, builderMsg, maxRounds);
+      if (builderMsg) finalRoundMsgs.push(builderMsg);
+    } else {
+      // No Builder: all agents run, last contributor gets DELIVERABLE
+      for (let i = 0; i < allFinalAgents.length; i++) {
+        const agent = allFinalAgents[i];
+        const isLast = i === allFinalAgents.length - 1;
+        markThinking(agent, maxRounds);
+        const msg = await callAgent(
+          agent,
+          isLast
+            ? `${finalBasePrompt} You are the last agent — synthesize all contributions into one cohesive final deliverable.`
+            : finalBasePrompt,
+          getVisibleContext(agent, [...allMessages, ...finalRoundMsgs], `R${maxRounds}`),
+          isLast ? "DELIVERABLE" : "R3",
+          undefined,
+          maxRounds,
+          maxRounds,
+        );
+        markDone(agent, msg, maxRounds);
+        if (msg) finalRoundMsgs.push(msg);
+      }
     }
+
     roundsCompletedRef.current = maxRounds;
   }
 
@@ -2749,11 +2849,13 @@ export default function SessionRoomClient() {
           deliverableExt={deliverableExt}
           reputationUpdates={reputationUpdates}
           githubConnected={!!user?.github_username}
+          githubRepoUrl={sessionGithubRepo}
           githubPushing={githubPushing}
           githubDeliveryUrl={githubDeliveryUrl}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
-          onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username ? pushToGitHub : undefined}
-          onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" && !user?.github_username ? saveGithubRepoAndRetry : undefined}
+          onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username && !!sessionGithubRepo ? () => pushToGitHub() : undefined}
+          onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" ? saveGithubRepoAndRetry : undefined}
+          onLinkGitHubUsername={linkGitHubUsername}
           githubPushError={githubPushError}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
@@ -2799,6 +2901,18 @@ function applyInlineMd(s: string): string {
     .replace(/`([^`]+)`/g, '<code style="font-family:monospace;font-size:0.82em;background:rgba(10,22,40,0.9);border:1px solid #1E2D4A;border-radius:3px;padding:1px 5px;color:#7dd3fc">$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong style="font-weight:700;color:#f1f5f9">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em style="font-style:italic;color:#cbd5e1">$1</em>');
+}
+
+function patchForTyping(text: string): string {
+  let out = text;
+  const fenceCount = (out.match(/```/g) ?? []).length;
+  if (fenceCount % 2 !== 0) out += "\n```";
+  const lines = out.split("\n");
+  const lastNonEmpty = [...lines].reverse().find((l) => l.trim() !== "");
+  if (lastNonEmpty && lastNonEmpty.trim().startsWith("|") && !lastNonEmpty.trim().endsWith("|")) {
+    out += " |";
+  }
+  return out;
 }
 
 function renderMarkdown(text: string): string {
@@ -3046,7 +3160,7 @@ function MessageBubble({
                 <div
                   className="rounded-xl px-3.5 py-2.5 text-sm text-al-text leading-relaxed break-words"
                   style={{ background: "rgba(13,20,33,0.7)", border: "1px solid #1E2D4A" }}
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(isTyping ? patchForTyping(content) : content) }}
                 />
                 {isTyping && (
                   <span className="animate-pulse ml-0.5">|</span>
@@ -3428,12 +3542,14 @@ function CloseModal({
   deliverableExt = "md",
   reputationUpdates,
   githubConnected,
+  githubRepoUrl,
   githubPushing,
   githubDeliveryUrl,
   githubPushError,
   onDownloadDeliverable,
   onPushGitHub,
   onSaveAndRetryGitHub,
+  onLinkGitHubUsername,
   onDownload,
   onClose,
 }: {
@@ -3451,18 +3567,39 @@ function CloseModal({
   deliverableExt?: string;
   reputationUpdates?: Record<string, ReputationUpdate> | null;
   githubConnected?: boolean;
+  githubRepoUrl?: string;
   githubPushing?: boolean;
   githubDeliveryUrl?: string | null;
   githubPushError?: string | null;
   onDownloadDeliverable?: (msg: Message) => void;
   onPushGitHub?: () => void;
   onSaveAndRetryGitHub?: (url: string) => Promise<void>;
+  onLinkGitHubUsername?: (username: string) => Promise<void>;
   onDownload: () => void;
   onClose: () => void;
 }) {
   const [inlineRepo, setInlineRepo] = useState("");
   const [inlineSaving, setInlineSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
+  // BUG C: username-link flow state
+  const [ghUsername, setGhUsername] = useState("");
+  const [ghUsernameSaving, setGhUsernameSaving] = useState(false);
+  const [ghUsernameError, setGhUsernameError] = useState<string | null>(null);
+  const [ghUsernameLinked, setGhUsernameLinked] = useState(false);
+
+  async function handleLinkUsername() {
+    if (!ghUsername.trim() || !onLinkGitHubUsername) return;
+    setGhUsernameSaving(true);
+    setGhUsernameError(null);
+    try {
+      await onLinkGitHubUsername(ghUsername.trim());
+      setGhUsernameLinked(true);
+    } catch (err) {
+      setGhUsernameError(err instanceof Error ? err.message : "Failed to link. Please try again.");
+    } finally {
+      setGhUsernameSaving(false);
+    }
+  }
 
   async function handleSaveAndRetry() {
     if (!inlineRepo.trim() || !onSaveAndRetryGitHub) return;
@@ -3676,45 +3813,47 @@ function CloseModal({
               Download Deliverable (.{deliverableExt})
             </button>
           )}
-          {onPushGitHub && (
-            githubDeliveryUrl ? (
-              <a
-                href={githubDeliveryUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
-                style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.45)", color: "#22C55E" }}
-              >
+          {/* Already pushed */}
+          {githubDeliveryUrl && (
+            <a
+              href={githubDeliveryUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+              style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.45)", color: "#22C55E" }}
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
+              </svg>
+              Pushed to GitHub — View Branch
+            </a>
+          )}
+          {/* BUG A fix: connected + repo URL — push button with explicit no-arg call */}
+          {!githubDeliveryUrl && onPushGitHub && outcome === "SUCCESS" && deliverable && (
+            <button
+              onClick={() => onPushGitHub()}
+              disabled={githubPushing}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+              style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
+            >
+              {githubPushing ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                </svg>
+              ) : (
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
                 </svg>
-                Pushed to GitHub — View Branch
-              </a>
-            ) : (
-              <button
-                onClick={onPushGitHub}
-                disabled={githubPushing}
-                className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-                style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
-              >
-                {githubPushing ? (
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-                  </svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
-                  </svg>
-                )}
-                {githubPushing ? "Pushing to GitHub…" : "Push to GitHub"}
-              </button>
-            )
+              )}
+              {githubPushing ? "Pushing to GitHub…" : "Push to GitHub"}
+            </button>
           )}
-          {!onPushGitHub && !githubConnected && outcome === "SUCCESS" && deliverable && (
+          {/* BUG B fix: connected but no repo URL — show repo input first */}
+          {!githubDeliveryUrl && !onPushGitHub && githubConnected && !githubRepoUrl && outcome === "SUCCESS" && deliverable && (
             <div className="flex flex-col gap-2">
               <p className="text-center text-xs text-al-muted">
-                No GitHub account linked — enter a repo URL to push directly:
+                Enter a GitHub repo URL to push the deliverable:
               </p>
               <div className="flex gap-2">
                 <input
@@ -3731,10 +3870,66 @@ function CloseModal({
                   className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
                   style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
                 >
-                  {inlineSaving ? "…" : "Save & Retry"}
+                  {inlineSaving ? "…" : "Save & Push"}
                 </button>
               </div>
               {inlineError && <p className="text-[10px] text-red-400">{inlineError}</p>}
+            </div>
+          )}
+          {/* BUG C fix: GitHub account not linked — step 1: username, step 2: repo */}
+          {!githubDeliveryUrl && !githubConnected && outcome === "SUCCESS" && deliverable && (
+            <div className="flex flex-col gap-2">
+              {!ghUsernameLinked ? (
+                <>
+                  <p className="text-center text-xs text-al-muted">
+                    Your AgentLink account is not linked to GitHub. Enter your GitHub username to enable push.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={ghUsername}
+                      onChange={(e) => setGhUsername(e.target.value)}
+                      placeholder="github-username"
+                      className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                      onKeyDown={(e) => { if (e.key === "Enter") handleLinkUsername(); }}
+                    />
+                    <button
+                      onClick={handleLinkUsername}
+                      disabled={ghUsernameSaving || !ghUsername.trim()}
+                      className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
+                      style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
+                    >
+                      {ghUsernameSaving ? "…" : "Link"}
+                    </button>
+                  </div>
+                  {ghUsernameError && <p className="text-[10px] text-red-400">{ghUsernameError}</p>}
+                </>
+              ) : (
+                <>
+                  <p className="text-center text-xs text-green-400">
+                    GitHub account linked as <strong>{ghUsername}</strong>. Now enter your repo URL:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={inlineRepo}
+                      onChange={(e) => setInlineRepo(e.target.value)}
+                      placeholder="https://github.com/user/repo"
+                      className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRetry(); }}
+                    />
+                    <button
+                      onClick={handleSaveAndRetry}
+                      disabled={inlineSaving || !inlineRepo.trim()}
+                      className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
+                      style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.45)", color: "#8B5CF6" }}
+                    >
+                      {inlineSaving ? "…" : "Save & Push"}
+                    </button>
+                  </div>
+                  {inlineError && <p className="text-[10px] text-red-400">{inlineError}</p>}
+                </>
+              )}
             </div>
           )}
           {githubPushError && (

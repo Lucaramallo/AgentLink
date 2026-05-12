@@ -48,6 +48,10 @@ class DemoRequest(BaseModel):
     acting_as: dict | None = None
     session_messages: list[dict] = []
     subtask: str | None = None
+    round_number: int | None = None
+    max_rounds: int | None = None
+    team_agents: list[dict] | None = None
+    rn_context: str | None = None
 
 
 class DemoResponse(BaseModel):
@@ -221,6 +225,10 @@ async def agent_respond(
             session_messages=payload.session_messages,
             acting_as=payload.acting_as,
             subtask=subtask,
+            round_number=payload.round_number,
+            max_rounds=payload.max_rounds,
+            team_agents=payload.team_agents,
+            rn_context=payload.rn_context,
         )
 
         agent = AGENTS[agent_id]

@@ -83,12 +83,130 @@ AGENTS: dict[str, dict[str, str]] = {
 }
 
 
+def build_role_system_prompt(
+    role: str,
+    round_number: int,
+    max_rounds: int,
+    team_agents: list[dict] | None = None,
+    rn_context: str | None = None,
+) -> str:
+    """Return a role+round-specific instruction block appended to the base persona prompt."""
+    is_final = round_number >= max_rounds
+    teammates = ""
+    if team_agents:
+        parts = [f"{a.get('name', '?')} ({a.get('role', '?')})" for a in team_agents]
+        teammates = "Team: " + ", ".join(parts) + "."
+
+    base = (
+        f"\n\n--- SESSION CONTEXT ---\n"
+        f"Round: {round_number} of {max_rounds}. "
+        f"Your role this session: {role}. "
+        f"{teammates}\n"
+    )
+
+    r = role.lower()
+
+    if r == "coordinator":
+        if round_number == 1:
+            instructions = (
+                "You are the COORDINATOR for this session. In Round 1 you must: "
+                "(1) Introduce yourself as coordinator, "
+                "(2) Acknowledge the task assignment plan, "
+                "(3) Contribute your own perspective on the task. "
+                "Be directive and clear about how the team should approach the work."
+            )
+        elif is_final:
+            instructions = (
+                "You are the COORDINATOR. This is the FINAL ROUND. "
+                "Verify that the Builder has produced the correct deliverable. "
+                "Emit a coordination summary: confirm the team met the deliverable spec, "
+                "note any gaps, and close with your assessment. Be concise and authoritative."
+            )
+        else:
+            instructions = (
+                "You are the COORDINATOR. Actively monitor progress. "
+                "Redirect agents who are going off-track. "
+                "Keep the team focused on the deliverable spec. "
+                "Call out drift, gaps, or contradictions you observe."
+            )
+
+    elif r == "contributor":
+        if is_final:
+            instructions = (
+                "You are a CONTRIBUTOR. This is the FINAL ROUND. "
+                "Produce a concise, structured executive summary of your contribution. "
+                "Address it explicitly to the Builder (or the team if no Builder is set). "
+                "Format: key findings, your recommendation, what the Builder needs from you. "
+                "No rambling — clean, structured output only."
+            )
+        else:
+            instructions = (
+                "You are a CONTRIBUTOR. Participate fully and develop your position. "
+                "Engage with colleagues, refine your analysis, and advance the work."
+            )
+
+    elif r == "reviewer":
+        if is_final:
+            instructions = (
+                "You are the REVIEWER. This is the FINAL ROUND. "
+                "Deliver a final quality assessment of all contributions before the Builder assembles. "
+                "Do NOT produce content yourself — assess quality, identify gaps, "
+                "flag risks, and confirm whether the work meets the deliverable spec. "
+                "Be specific: name which contributions pass, which need revision, and why."
+            )
+        else:
+            instructions = (
+                "You are the REVIEWER. Do NOT produce content — act as an active advisor. "
+                "Comment on others' work, identify gaps, suggest improvements, "
+                "raise quality concerns. Be specific and constructive."
+            )
+
+    elif r == "builder":
+        if is_final:
+            rn_block = ""
+            if rn_context:
+                rn_block = (
+                    "\n\nFinal round summaries from the team (use these to assemble the deliverable):\n\n"
+                    f"{rn_context}"
+                )
+            instructions = (
+                "You are the BUILDER. This is the FINAL ROUND. "
+                "Your job is to assemble the final deliverable using your specialty. "
+                "Use all Contributor summaries and Reviewer assessments provided below. "
+                "Produce the complete, polished deliverable — not a summary, the actual artifact. "
+                "Begin your response with the word DELIVERABLE on its own line, then the content."
+                f"{rn_block}"
+            )
+        else:
+            instructions = (
+                "You are the BUILDER. Participate as a specialist contributor. "
+                "In earlier rounds, develop your understanding of the requirements. "
+                "You will assemble the final deliverable in the last round."
+            )
+
+    elif r == "requester":
+        instructions = (
+            "You are the REQUESTER. You go first in each round when you participate. "
+            "You can intervene at any point to clarify requirements, redirect the team, "
+            "or add new constraints. Keep the team accountable to your original request."
+        )
+
+    else:
+        instructions = f"Participate in Round {round_number} according to your role ({role})."
+
+    return base + instructions
+
+
 async def get_agent_response(
     agent_id: str,
     message: str,
     session_messages: list[dict],
     acting_as: dict | None = None,
     subtask: str | None = None,
+    round_number: int | None = None,
+    max_rounds: int | None = None,
+    team_agents: list[dict] | None = None,
+    rn_context: str | None = None,
 ) -> str:
     """Call the Claude API as the specified agent and return its response."""
     agent = AGENTS.get(agent_id)
@@ -132,6 +250,14 @@ async def get_agent_response(
             f"In this session you are acting as {name} with the role of {role}. "
             f"Respond accordingly.\n\n{system}"
         )
+        if round_number is not None and max_rounds is not None:
+            system += build_role_system_prompt(
+                role=role,
+                round_number=round_number,
+                max_rounds=max_rounds,
+                team_agents=team_agents,
+                rn_context=rn_context,
+            )
     if subtask:
         system = f"{system}\n\nYour assigned subtask for this session: {subtask}"
 

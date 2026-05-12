@@ -23,9 +23,10 @@ def get_turn_order(
     Observers and human Requester are excluded from all turn groups.
     """
     agents: list[dict] = session_graph.get("agents", [])
-    # Exclude humans, Observers, and Coordinators from all turn groups
-    non_human = [a for a in agents if not a.get("is_human", False) and a.get("role") != "Coordinator"]
+    # Exclude humans and Observers; Coordinators now participate in all rounds
+    non_human = [a for a in agents if not a.get("is_human", False)]
 
+    coordinators = [a for a in non_human if a.get("role") == "Coordinator"]
     contributors = [a for a in non_human if a.get("role") == "Contributor"]
     builders     = [a for a in non_human if a.get("role") == "Builder"]
     reviewers    = [a for a in non_human if a.get("role") == "Reviewer"]
@@ -33,9 +34,18 @@ def get_turn_order(
 
     if round_number >= max_rounds:
         final = builders if builders else contributors
-        return [TurnGroup(agents=final, parallel=False, label="builders")]
+        groups: list[TurnGroup] = []
+        # Coordinators go first even in the final round
+        if coordinators:
+            groups.append(TurnGroup(agents=coordinators, parallel=False, label="coordinators"))
+        groups.append(TurnGroup(agents=final, parallel=False, label="builders"))
+        return groups
 
-    groups: list[TurnGroup] = []
+    groups = []
+
+    # Coordinators always go first in every round
+    if coordinators:
+        groups.append(TurnGroup(agents=coordinators, parallel=False, label="coordinators"))
 
     if round_number == 1:
         worker_agents = contributors + builders
