@@ -297,9 +297,11 @@ async def session_peer_review(room_id: str, payload: PeerReviewRequest):
             )
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning("peer_review failed for %s: %s", agent.name, exc)
-            import random
-            scores = {a.id: round(random.uniform(3.0, 5.0), 1) for a in others}
+            logging.getLogger(__name__).error(
+                "peer_review failed for %s: %s: %s",
+                agent.name, type(exc).__name__, exc,
+            )
+            scores = {a.id: None for a in others}
         role_weight = _ROLE_WEIGHTS.get(agent.role, 1.0)
         reviews.append({
             "voter": agent.name,
@@ -308,11 +310,12 @@ async def session_peer_review(room_id: str, payload: PeerReviewRequest):
             "scores": scores,
         })
         for aid, score in scores.items():
-            totals[aid] = totals.get(aid, 0.0) + score * role_weight
-            weights[aid] = weights.get(aid, 0.0) + role_weight
+            if score is not None:
+                totals[aid] = totals.get(aid, 0.0) + score * role_weight
+                weights[aid] = weights.get(aid, 0.0) + role_weight
 
     weighted_averages = {
-        aid: round(totals[aid] / weights[aid], 2) if weights.get(aid, 0) > 0 else 0.0
+        aid: round(totals[aid] / weights[aid], 2) if weights.get(aid, 0) > 0 else None
         for aid in totals
     }
     return {"reviews": reviews, "weighted_averages": weighted_averages}

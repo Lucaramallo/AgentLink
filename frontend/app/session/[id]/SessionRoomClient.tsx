@@ -285,9 +285,9 @@ interface PeerReviewData {
     voter: string;
     voter_id: string;
     voter_role: string;
-    scores: Record<string, number>;
+    scores: Record<string, number | null>;
   }>;
-  weighted_averages: Record<string, number>;
+  weighted_averages: Record<string, number | null>;
 }
 
 interface ReputationUpdate {
@@ -459,6 +459,8 @@ export default function SessionRoomClient() {
   // Human always-on messaging (Feature 2/7)
   // True while callDemoAgents is running — used to suppress re-triggering the loop
   const agentLoopRunningRef = useRef(false);
+  // True once all rounds have completed — prevents new loops after session finishes
+  const sessionCompletedRef = useRef(false);
 
   // Round voting system (Feature 1)
   const [showVoteBanner, setShowVoteBanner] = useState(false);
@@ -553,6 +555,20 @@ export default function SessionRoomClient() {
   const roundsCompletedRef = useRef(0);
 
   const { balance, add } = useCredits();
+
+  // ── Restore session-completed flag across refresh (FIX 4) ───────────────
+  useEffect(() => {
+    if (roomId && sessionStorage.getItem(`agentlink_session_completed_${roomId}`)) {
+      sessionCompletedRef.current = true;
+    }
+  }, [roomId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear session-completed flag when room closes
+  useEffect(() => {
+    if ((status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED") && roomId) {
+      sessionStorage.removeItem(`agentlink_session_completed_${roomId}`);
+    }
+  }, [status, roomId]);
 
   // ── Restore canvas layout from build page ───────────────────────────────
   useEffect(() => {
@@ -1817,6 +1833,8 @@ export default function SessionRoomClient() {
     }
 
     roundsCompletedRef.current = maxRounds;
+    sessionCompletedRef.current = true;
+    sessionStorage.setItem(`agentlink_session_completed_${roomId}`, "true");
     } finally {
       agentLoopRunningRef.current = false;
     }
@@ -1959,7 +1977,8 @@ export default function SessionRoomClient() {
 
     // If agents are already running, the message is injected as context for
     // the next agent's turn via mergeHumanDirectMsgs. Don't re-trigger the loop.
-    if (!loopRunning) {
+    // If the session has already completed all rounds, don't start a new loop.
+    if (!loopRunning && !sessionCompletedRef.current) {
       setSending(true);
       await callDemoAgents(text, updatedMessages);
       setSending(false);
@@ -2625,15 +2644,6 @@ export default function SessionRoomClient() {
                 </div>
               )}
               <div className="flex gap-2">
-                <select
-                  value={inputType}
-                  onChange={(e) => setInputType(e.target.value as MessageType)}
-                  className="bg-al-bg border border-al-border rounded-lg px-2 py-1.5 text-xs text-al-text focus:outline-none focus:border-al-accent transition-colors"
-                >
-                  {(["TASK", "DELIVERABLE", "VERIFYING", "EXIT KEY"] as MessageType[]).map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
                 <input
                   type="text"
                   value={inputText}
@@ -3742,9 +3752,9 @@ function RatingModal({
                         <td className="px-2 py-2 text-center">
                           {wavg[agent.id] != null ? (
                             <div className="flex flex-col items-center gap-0.5">
-                              <StarDisplay value={wavg[agent.id]} size={9} />
+                              <StarDisplay value={wavg[agent.id]!} size={9} />
                               <span className="font-semibold text-amber-400 text-[10px]">
-                                {wavg[agent.id].toFixed(1)}
+                                {wavg[agent.id]!.toFixed(1)}
                               </span>
                             </div>
                           ) : (
@@ -3761,6 +3771,11 @@ function RatingModal({
             <div className="py-4 bg-al-bg rounded-xl border border-al-border text-center text-sm text-al-muted">
               Peer review data unavailable
             </div>
+          )}
+          {voters.length > 0 && voters.some((v) => Object.values(v.scores).some((s) => s === null)) && (
+            <p className="mt-2 text-[11px] text-amber-400/80">
+              Peer review unavailable for some agents — scores marked with —
+            </p>
           )}
         </div>
 
