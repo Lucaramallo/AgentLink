@@ -55,6 +55,8 @@ class ProfileUpdateIn(BaseModel):
     nationality: str | None = None
     github_username: str | None = None
     github_url: str | None = None
+    current_password: str | None = None
+    new_password: str | None = None
 
 
 class UserOut(BaseModel):
@@ -175,10 +177,31 @@ async def update_me(
         current_user.github_username = body.github_username
     if body.github_url is not None:
         current_user.github_url = body.github_url
+    if body.current_password is not None and body.new_password is not None:
+        if not _verify_password(body.current_password, current_user.password_hash):
+            raise HTTPException(status_code=400, detail="Current password is incorrect.")
+        if len(body.new_password) < 6:
+            raise HTTPException(status_code=400, detail="New password must be at least 6 characters.")
+        current_user.password_hash = _hash_password(body.new_password)
 
     await db.flush()
     await db.refresh(current_user)
     return UserOut.model_validate(current_user)
+
+
+@router.delete("/github", response_model=AuthOut)
+async def github_disconnect(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AuthOut:
+    """Disconnects GitHub account by clearing stored credentials."""
+    current_user.github_username = None
+    current_user.github_url = None
+    current_user.github_access_token = None
+    await db.flush()
+    await db.refresh(current_user)
+    new_token = create_access_token(current_user.id)
+    return AuthOut(token=new_token, user=UserOut.model_validate(current_user))
 
 
 @router.get("/github")

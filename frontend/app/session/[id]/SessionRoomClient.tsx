@@ -6,7 +6,7 @@ import Link from "next/link";
 import type { SessionRole } from "../../lib/types";
 import { useCredits } from "../../lib/credits";
 import { agentDropped } from "../../lib/api";
-import { useAuth } from "../../lib/auth";
+import { useAuth, type AuthUser } from "../../lib/auth";
 import PollCard, { type PollType } from "./PollCard";
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -309,7 +309,7 @@ export default function SessionRoomClient() {
   const roomId = id ?? "";
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAuthenticated, loading: authLoading, user, token } = useAuth();
+  const { isAuthenticated, loading: authLoading, user, token, login } = useAuth();
 
   // Detect return from GitHub OAuth redirect (from close-modal step 1 push flow)
   const [pendingGithubResume, setPendingGithubResume] = useState(
@@ -1220,6 +1220,11 @@ export default function SessionRoomClient() {
     } finally {
       setGithubPushing(false);
     }
+  }
+
+  function handleOAuthSuccess() {
+    setGithubConnectionFailed(false);
+    setTimeout(() => pushToGitHub(), 50);
   }
 
   // ── Coordinator plan generation (extracted so Retry button can re-invoke) ──
@@ -3230,6 +3235,7 @@ export default function SessionRoomClient() {
           onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username && !githubConnectionFailed && !!sessionGithubRepo ? () => pushToGitHub() : undefined}
           onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" ? saveGithubRepoAndRetry : undefined}
           githubPushError={githubPushError}
+          onGithubOAuthSuccess={handleOAuthSuccess}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
         />
@@ -3927,6 +3933,7 @@ function CloseModal({
   onDownloadDeliverable,
   onPushGitHub,
   onSaveAndRetryGitHub,
+  onGithubOAuthSuccess,
   onDownload,
   onClose,
 }: {
@@ -3951,15 +3958,32 @@ function CloseModal({
   onDownloadDeliverable?: (msg: Message) => void;
   onPushGitHub?: () => void;
   onSaveAndRetryGitHub?: (url: string) => Promise<void>;
+  onGithubOAuthSuccess?: () => void;
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const { token: authToken } = useAuth();
+  const { token: authToken, login } = useAuth();
   const [inlineRepo, setInlineRepo] = useState("");
   const [inlineSaving, setInlineSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function handleMessage(e: MessageEvent) {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "github-oauth-success") {
+        if (e.data.token && e.data.user) login(e.data.token, e.data.user as AuthUser);
+        setOauthLoading(false);
+        onGithubOAuthSuccess?.();
+      } else if (e.data?.type === "github-oauth-error") {
+        setOauthError((e.data.error as string | undefined) ?? "OAuth failed.");
+        setOauthLoading(false);
+      }
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleOAuthRedirect() {
     if (!authToken) { setOauthError("You must be logged in."); return; }
@@ -3971,8 +3995,10 @@ function CloseModal({
       });
       if (!res.ok) throw new Error("Could not start GitHub OAuth.");
       const { url } = await res.json();
-      sessionStorage.setItem("agentlink_pending_github_push", JSON.stringify({ roomId }));
-      window.location.href = url;
+      const popup = window.open(url, "github-oauth", "width=600,height=700,left=300,top=100");
+      if (!popup) {
+        throw new Error("Popup blocked. Please allow popups for this site and try again.");
+      }
     } catch (err) {
       setOauthError(err instanceof Error ? err.message : "GitHub OAuth failed.");
       setOauthLoading(false);

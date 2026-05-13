@@ -18,6 +18,8 @@ import {
   regenerateAgentKey,
   testAgentWebhook,
   resetAgentFailures,
+  authFetch,
+  API_BASE,
   type AdminAgent,
   type AdminSession,
   type MyStats,
@@ -90,7 +92,7 @@ type EditForm = {
 };
 
 export default function AdminClient() {
-  const { user, isSuperAdmin, isAuthenticated, loading: authLoading, logout } = useAuth();
+  const { user, isSuperAdmin, isAuthenticated, loading: authLoading, logout, login, token } = useAuth();
   const router = useRouter();
 
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -140,6 +142,17 @@ export default function AdminClient() {
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
   const [resettingFailuresId, setResettingFailuresId] = useState<string | null>(null);
 
+  // GitHub Integration section state
+  const [githubOauthLoading, setGithubOauthLoading] = useState(false);
+  const [githubOauthError, setGithubOauthError] = useState<string | null>(null);
+  const [githubDisconnecting, setGithubDisconnecting] = useState(false);
+
+  // Account Settings section state
+  const [settingsForm, setSettingsForm] = useState({ displayName: "", currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+
   useEffect(() => {
     if (authLoading) return;
     if (!isAuthenticated) {
@@ -164,6 +177,26 @@ export default function AdminClient() {
     if (!isAuthenticated) return;
     fetchRankings(rankSort).then(setRankings);
   }, [rankSort, isAuthenticated]);
+
+  useEffect(() => {
+    if (user?.full_name) setSettingsForm(f => ({ ...f, displayName: user.full_name }));
+  }, [user?.full_name]);
+
+  useEffect(() => {
+    function handleGithubMessage(e: MessageEvent) {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "github-oauth-success") {
+        if (e.data.token && e.data.user) login(e.data.token as string, e.data.user);
+        setGithubOauthLoading(false);
+        setGithubOauthError(null);
+      } else if (e.data?.type === "github-oauth-error") {
+        setGithubOauthError((e.data.error as string | undefined) ?? "OAuth failed.");
+        setGithubOauthLoading(false);
+      }
+    }
+    window.addEventListener("message", handleGithubMessage);
+    return () => window.removeEventListener("message", handleGithubMessage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredAgents = useMemo(() => {
     const q = agentSearch.toLowerCase();
@@ -236,6 +269,70 @@ export default function AdminClient() {
   async function connectGithub() {
     const url = await fetchGithubOAuthUrl();
     if (url) window.location.href = url;
+  }
+
+  async function connectGithubPopup() {
+    setGithubOauthLoading(true);
+    setGithubOauthError(null);
+    try {
+      const url = await fetchGithubOAuthUrl();
+      if (!url) throw new Error("Could not start GitHub OAuth.");
+      const popup = window.open(url, "github-oauth", "width=600,height=700,left=300,top=100");
+      if (!popup) throw new Error("Popup blocked. Allow popups for this site and try again.");
+    } catch (err) {
+      setGithubOauthError(err instanceof Error ? err.message : "OAuth failed.");
+      setGithubOauthLoading(false);
+    }
+  }
+
+  async function disconnectGithub() {
+    setGithubDisconnecting(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/auth/github`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to disconnect GitHub.");
+      const data = await res.json() as { token: string; user: Parameters<typeof login>[1] };
+      login(data.token, data.user);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to disconnect GitHub.", false);
+    } finally {
+      setGithubDisconnecting(false);
+    }
+  }
+
+  async function saveSettings() {
+    setSettingsSaving(true);
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    try {
+      if (settingsForm.newPassword && !settingsForm.currentPassword) {
+        throw new Error("Enter your current password to set a new one.");
+      }
+      if (settingsForm.newPassword && settingsForm.newPassword !== settingsForm.confirmPassword) {
+        throw new Error("New passwords do not match.");
+      }
+      const body: Record<string, string> = {};
+      if (settingsForm.displayName.trim()) body.full_name = settingsForm.displayName.trim();
+      if (settingsForm.currentPassword && settingsForm.newPassword) {
+        body.current_password = settingsForm.currentPassword;
+        body.new_password = settingsForm.newPassword;
+      }
+      const res = await authFetch(`${API_BASE}/api/v1/auth/me`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { detail?: string };
+        throw new Error(err.detail ?? "Failed to save settings.");
+      }
+      const updatedUser = await res.json() as Parameters<typeof login>[1];
+      if (token) login(token, updatedUser);
+      setSettingsSuccess("Settings saved.");
+      setSettingsForm(f => ({ ...f, currentPassword: "", newPassword: "", confirmPassword: "" }));
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : "Failed to save settings.");
+    } finally {
+      setSettingsSaving(false);
+    }
   }
 
   async function openRegisterModal() {
@@ -997,6 +1094,96 @@ export default function AdminClient() {
             </div>
           </div>
         )}
+        {/* ── GITHUB INTEGRATION ─────────────────────── */}
+        <div style={{ marginTop: 40, paddingTop: 32, borderTop: "1px solid #1E2D4A" }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: "#E2E8F0" }}>GitHub Integration</h2>
+          {githubConnected ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <span style={{ color: "#22C55E", fontSize: 16 }}>✓</span>
+              <span style={{ color: "#E2E8F0", fontSize: 14 }}>Connected as <strong>@{user?.github_username}</strong></span>
+              <button
+                onClick={disconnectGithub}
+                disabled={githubDisconnecting}
+                style={{ marginLeft: "auto", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444", padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: githubDisconnecting ? "not-allowed" : "pointer", opacity: githubDisconnecting ? 0.7 : 1 }}
+              >
+                {githubDisconnecting ? "Disconnecting…" : "Disconnect"}
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <span style={{ color: "#64748B", fontSize: 14 }}>Not connected</span>
+              <button
+                onClick={connectGithubPopup}
+                disabled={githubOauthLoading}
+                style={{ background: "#F59E0B", border: "none", color: "#070B14", padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: githubOauthLoading ? "not-allowed" : "pointer", opacity: githubOauthLoading ? 0.7 : 1 }}
+              >
+                {githubOauthLoading ? "Connecting…" : "Connect GitHub"}
+              </button>
+              {githubOauthError && <span style={{ color: "#EF4444", fontSize: 12 }}>{githubOauthError}</span>}
+            </div>
+          )}
+        </div>
+
+        {/* ── ACCOUNT SETTINGS ────────────────────────── */}
+        <div style={{ marginTop: 32, paddingTop: 32, borderTop: "1px solid #1E2D4A", marginBottom: 48 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: "#E2E8F0" }}>Account Settings</h2>
+          <div style={{ maxWidth: 480, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 6 }}>Display Name</label>
+              <input
+                value={settingsForm.displayName}
+                onChange={e => setSettingsForm(f => ({ ...f, displayName: e.target.value }))}
+                style={{ width: "100%", background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, outline: "none" }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 6 }}>Email</label>
+              <input
+                value={user?.email ?? ""}
+                readOnly
+                style={{ width: "100%", background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#64748B", fontSize: 13, cursor: "default", outline: "none" }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 6 }}>Current Password</label>
+              <input
+                type="password"
+                value={settingsForm.currentPassword}
+                onChange={e => setSettingsForm(f => ({ ...f, currentPassword: e.target.value }))}
+                placeholder="Leave blank to keep current"
+                style={{ width: "100%", background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, outline: "none" }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 6 }}>New Password</label>
+              <input
+                type="password"
+                value={settingsForm.newPassword}
+                onChange={e => setSettingsForm(f => ({ ...f, newPassword: e.target.value }))}
+                placeholder="Min. 6 characters"
+                style={{ width: "100%", background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, outline: "none" }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 6 }}>Confirm New Password</label>
+              <input
+                type="password"
+                value={settingsForm.confirmPassword}
+                onChange={e => setSettingsForm(f => ({ ...f, confirmPassword: e.target.value }))}
+                style={{ width: "100%", background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, outline: "none" }}
+              />
+            </div>
+            {settingsError && <p style={{ color: "#EF4444", fontSize: 13, margin: 0 }}>{settingsError}</p>}
+            {settingsSuccess && <p style={{ color: "#22C55E", fontSize: 13, margin: 0 }}>{settingsSuccess}</p>}
+            <button
+              onClick={saveSettings}
+              disabled={settingsSaving}
+              style={{ alignSelf: "flex-start", background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: settingsSaving ? "not-allowed" : "pointer", opacity: settingsSaving ? 0.7 : 1 }}
+            >
+              {settingsSaving ? "Saving…" : "Save Settings"}
+            </button>
+          </div>
+        </div>
       </main>
     </div>
   );

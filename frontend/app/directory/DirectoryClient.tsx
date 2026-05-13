@@ -134,7 +134,7 @@ export default function DirectoryClient({ agents }: DirectoryClientProps) {
                 </div>
                 <span className="text-sm text-al-muted">{user.full_name}</span>
                 <Link href="/admin" className="text-xs text-al-muted-2 hover:text-al-accent px-2 py-1 rounded border border-al-border">
-                  My Agents
+                  My Panel
                 </Link>
                 <button
                   onClick={logout}
