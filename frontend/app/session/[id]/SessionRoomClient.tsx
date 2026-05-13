@@ -418,6 +418,7 @@ export default function SessionRoomClient() {
   const [fbAgents, setFbAgents] = useState<string[]>([]);
   const [fbRetry, setFbRetry] = useState<boolean | null>(null);
   const [fbSubmitting, setFbSubmitting] = useState(false);
+  const [githubConnectionFailed, setGithubConnectionFailed] = useState(false);
 
   // Typewriter effect
   const [revealedIds, setRevealedIds]           = useState<Set<string>>(new Set());
@@ -448,6 +449,7 @@ export default function SessionRoomClient() {
   const [activeCoordinatorTab, setActiveCoordinatorTab] = useState<string | null>(null);
   const coordinatorPlanResolveRef = useRef<(() => void) | null>(null);
   const coordinatorPlanRef = useRef<{ assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>; summary: string } | null>(null);
+  const coordinatorPlanDoneRef = useRef(false);
 
   // Auto-task
   const [taskDescription, setTaskDescription] = useState<string>("");
@@ -934,10 +936,25 @@ export default function SessionRoomClient() {
 
         if (cancelled) return;
 
-        if (!savedGraphLoadedRef.current) {
-          // Prefer session_graph from backend (preserves roles, isBuilder, clusters)
-          const sg: { agents?: Array<{ id: string; name: string; role: SessionRole; is_human?: boolean; cluster_id?: string | null; is_builder?: boolean }>; edges?: Array<{ from: string; to: string }> } | null = room.session_graph ?? null;
-          if (sg?.agents && sg.agents.length > 0) {
+        // Always apply the backend session_graph when available — it is the authoritative
+        // source for role, isBuilder, and clusterId. If sessionStorage already loaded x,y
+        // positions, merge: preserve positions but overwrite metadata from the backend.
+        const sg: { agents?: Array<{ id: string; name: string; role: SessionRole; is_human?: boolean; cluster_id?: string | null; is_builder?: boolean }>; edges?: Array<{ from: string; to: string }> } | null = room.session_graph ?? null;
+        if (sg?.agents && sg.agents.length > 0) {
+          const sgEdges: GraphEdge[] = (sg.edges ?? []).map((e) => ({ fromId: e.from, toId: e.to }));
+          if (savedGraphLoadedRef.current) {
+            // Merge: update metadata on nodes already loaded from sessionStorage (preserves x,y)
+            setGraphNodes((prev) => {
+              const merged = prev.map((n) => {
+                const a = sg.agents!.find((a) => a.id === n.id);
+                if (!a) return n;
+                return { ...n, role: a.role, isBuilder: a.is_builder ?? false, clusterId: a.cluster_id ?? n.clusterId };
+              });
+              return merged;
+            });
+            setGraphEdges(sgEdges);
+          } else {
+            // No sessionStorage data — build nodes from backend graph with auto-positioned x,y
             const sgNodes: GraphNode[] = sg.agents.map((a, i) => ({
               id: a.id,
               x: 200 + (i % 4) * 160,
@@ -950,16 +967,16 @@ export default function SessionRoomClient() {
             }));
             const human: GraphNode = { id: "human", x: 100, y: 100, label: "YOU", role: "Requester", isHuman: true, isBuilder: false };
             const allNodes = sgNodes.some((n) => n.isHuman) ? sgNodes : [human, ...sgNodes];
-            const sgEdges: GraphEdge[] = (sg.edges ?? []).map((e) => ({ fromId: e.from, toId: e.to }));
             setGraphNodes(allNodes);
             setGraphEdges(sgEdges);
             setParticipantCount(allNodes.length);
-          } else if (participants.length > 1) {
-            const { nodes, edges } = buildGraph(participants);
-            setGraphNodes(nodes);
-            setGraphEdges(edges);
-            setParticipantCount(participants.length);
           }
+        } else if (!savedGraphLoadedRef.current && participants.length > 1) {
+          // Final fallback: basic contract participants (no roles/builder info)
+          const { nodes, edges } = buildGraph(participants);
+          setGraphNodes(nodes);
+          setGraphEdges(edges);
+          setParticipantCount(participants.length);
         }
 
         if (room.github_repo_url) setSessionGithubRepo(room.github_repo_url);
@@ -1007,8 +1024,8 @@ export default function SessionRoomClient() {
 
         if (data.type === "session_init") {
           const init = data.data;
-          // Populate graph from WS init if room fetch hasn't done it yet
-          if (init?.participants?.length && graphNodesRef.current.length === 0) {
+          // Populate graph from WS init only if sessionStorage restore hasn't already done it
+          if (init?.participants?.length && !savedGraphLoadedRef.current) {
             const participants = init.participants as Array<{
               agent_id: string; name: string; role: SessionRole; is_human?: boolean;
             }>;
@@ -1120,6 +1137,7 @@ export default function SessionRoomClient() {
 
   async function saveGithubRepoAndRetry(url: string) {
     setSessionGithubRepo(url);
+    setGithubConnectionFailed(false);
     try {
       await fetch(`${API}/rooms/${roomId}`, {
         method: "PATCH",
@@ -1162,7 +1180,11 @@ export default function SessionRoomClient() {
       if (!res.ok) throw new Error(data.detail ?? "GitHub delivery failed");
       setGithubDeliveryUrl(data.branch_url);
     } catch (err) {
-      setGithubPushError(err instanceof Error ? err.message : "GitHub push failed. Please try again.");
+      const msg = err instanceof Error ? err.message : "GitHub push failed. Please try again.";
+      setGithubPushError(msg);
+      if (msg.toLowerCase().includes("not connected")) {
+        setGithubConnectionFailed(true);
+      }
     } finally {
       setGithubPushing(false);
     }
@@ -1179,7 +1201,8 @@ export default function SessionRoomClient() {
     if (agents.length === 0 && coordinators.length === 0) return;
 
     // ── Coordinator pre-round plan ─────────────────────────────────────────
-    if (coordinators.length > 0) {
+    // Only show the plan modal on the first invocation; skip on subsequent human messages
+    if (coordinators.length > 0 && !coordinatorPlanDoneRef.current) {
       setCoordinatorPlanLoading(true);
       setShowCoordinatorPlan(true);
       try {
@@ -1729,6 +1752,7 @@ export default function SessionRoomClient() {
     setFailedAgent(null);
     setStatus("CLOSED_DISPUTED");
     setOutcome("INCOMPLETE");
+    setShowProposePoll(false);
     setShowFeedbackModal(true);
   }
 
@@ -1737,6 +1761,7 @@ export default function SessionRoomClient() {
       setMessages((prev) => [...prev, systemMsg("Session cancelled by Requester")]);
       setStatus("CLOSED_DISPUTED");
       setOutcome("CANCELLED");
+      setShowProposePoll(false);
       setShowFeedbackModal(true);
       setShowCancelConfirm(false);
       return;
@@ -1762,6 +1787,7 @@ export default function SessionRoomClient() {
     setMessages((prev) => [...prev, systemMsg("Session cancelled by Requester")]);
     setStatus("CLOSED_DISPUTED");
     setOutcome("CANCELLED");
+    setShowProposePoll(false);
     setShowFeedbackModal(true);
     setShowCancelConfirm(false);
   }
@@ -1814,9 +1840,14 @@ export default function SessionRoomClient() {
         })),
       }),
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (r.ok) return r.json();
+        const body = await r.json().catch(() => ({}));
+        console.error("[peer-review] API error", r.status, body);
+        return null;
+      })
       .then((data) => { if (data) setPeerReviewData(data); })
-      .catch(() => {})
+      .catch((err) => { console.error("[peer-review] fetch failed", err); })
       .finally(() => setPeerReviewLoading(false));
   }
 
@@ -1880,6 +1911,7 @@ export default function SessionRoomClient() {
         if (backendStatus === "DISPUTED" || backendOutcome === "DISPUTE") {
           setStatus("CLOSED_DISPUTED");
           setOutcome("DISPUTED");
+          setShowProposePoll(false);
           setShowFeedbackModal(true);
           return;
         }
@@ -1906,6 +1938,7 @@ export default function SessionRoomClient() {
       } else {
         setStatus("CLOSED_DISPUTED");
         setOutcome("DISPUTED");
+        setShowProposePoll(false);
         setShowFeedbackModal(true);
       }
     } catch {
@@ -1918,6 +1951,7 @@ export default function SessionRoomClient() {
       } else {
         setStatus("CLOSED_DISPUTED");
         setOutcome("DISPUTED");
+        setShowProposePoll(false);
         setShowFeedbackModal(true);
       }
     } finally {
@@ -2466,8 +2500,8 @@ export default function SessionRoomClient() {
       {/* Agent failure modal */}
       {/* Mandatory failure feedback modal — cannot be dismissed */}
       {showFeedbackModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-5">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="w-full max-w-lg rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-5 my-auto max-h-[85vh] overflow-y-auto">
             <div className="space-y-1">
               <h2 className="text-base font-semibold text-al-text">
                 Before you go — help us improve
@@ -2795,6 +2829,7 @@ export default function SessionRoomClient() {
               {/* Skip — clears plan, starts R1 with no subtask injection */}
               <button
                 onClick={() => {
+                  coordinatorPlanDoneRef.current = true;
                   coordinatorPlanRef.current = null;
                   coordinatorPlanResolveRef.current?.();
                 }}
@@ -2831,6 +2866,7 @@ export default function SessionRoomClient() {
                     coordinatorPlanRef.current = { assignments: editedAssignments, summary: coordinatorPlan?.summary ?? "" };
                   } finally {
                     setConfirmingPlan(false);
+                    coordinatorPlanDoneRef.current = true;
                     coordinatorPlanResolveRef.current?.();
                   }
                 }}
@@ -2891,12 +2927,12 @@ export default function SessionRoomClient() {
           deliverable={deliverableMsg}
           deliverableExt={deliverableExt}
           reputationUpdates={reputationUpdates}
-          githubConnected={!!user?.github_username}
+          githubConnected={!!user?.github_username && !githubConnectionFailed}
           githubRepoUrl={sessionGithubRepo}
           githubPushing={githubPushing}
           githubDeliveryUrl={githubDeliveryUrl}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
-          onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username && !!sessionGithubRepo ? () => pushToGitHub() : undefined}
+          onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username && !githubConnectionFailed && !!sessionGithubRepo ? () => pushToGitHub() : undefined}
           onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" ? saveGithubRepoAndRetry : undefined}
           githubPushError={githubPushError}
           onDownload={downloadLog}
