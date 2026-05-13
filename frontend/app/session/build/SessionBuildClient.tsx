@@ -1062,11 +1062,16 @@ export default function SessionBuildClient() {
         // Restore the human node at its saved position (or a default)
         const x = ta.x ?? margin + Math.random() * 600;
         const y = ta.y ?? margin + Math.random() * 400;
-        newNodes.push({ id: "node-human-owner", x, y, agent: HUMAN_STUB, role: "Requester", isHuman: true });
+        // Use saved node_id so edges that reference the human still resolve correctly
+        const humanId = ta.node_id ?? "node-human-owner";
+        newNodes.push({ id: humanId, x, y, agent: HUMAN_STUB, role: "Requester", isHuman: true });
         continue;
       }
       const agent = allAgents.find((a) => a.id === ta.slug);
-      if (!agent) continue;
+      if (!agent) {
+        console.warn(`[applyTemplate] agent slug "${ta.slug}" not found in allAgents — node skipped`);
+        continue;
+      }
       // Use stored node_id so saved edges still reference valid IDs.
       // Fall back to a new ID for templates saved before node_id was added.
       const existingCount = newNodes.filter((n) => n.agent.id === agent.id).length;

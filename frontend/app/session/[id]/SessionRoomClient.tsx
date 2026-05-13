@@ -105,6 +105,10 @@ interface Message {
   sigValid: boolean;
   ts: string;
   isHuman?: boolean;
+  /** Set on human messages sent mid-session (while agent loop is running).
+   *  Triggers edge-filtered delivery — only agents with a direct edge to
+   *  the Human node will see this message in their context. */
+  humanDirect?: boolean;
   contentStructured?: Record<string, unknown>;
 }
 
@@ -450,9 +454,21 @@ export default function SessionRoomClient() {
   const coordinatorPlanResolveRef = useRef<(() => void) | null>(null);
   const coordinatorPlanRef = useRef<{ assignments: Array<{ agent_id: string; agent_name: string; subtask: string }>; summary: string } | null>(null);
   const coordinatorPlanDoneRef = useRef(false);
+  const coordinatorsForRetryRef = useRef<GraphNode[]>([]);
+
+  // Human always-on messaging (Feature 2/7)
+  // True while callDemoAgents is running — used to suppress re-triggering the loop
+  const agentLoopRunningRef = useRef(false);
+
+  // Round voting system (Feature 1)
+  const [showVoteBanner, setShowVoteBanner] = useState(false);
+  const [voteRoundNumber, setVoteRoundNumber] = useState(0);
+  const [voteResults, setVoteResults] = useState<Array<{ voter: string; vote: "yes" | "no" }>>([]);
+  const humanVoteResolverRef = useRef<((yes: boolean) => void) | null>(null);
 
   // Auto-task
   const [taskDescription, setTaskDescription] = useState<string>("");
+  const taskDescriptionRef = useRef<string>("");
   const autoTaskSentRef = useRef(false);
 
   // Demo quota
@@ -509,7 +525,7 @@ export default function SessionRoomClient() {
     const totalChars = msg.content.length;
     const timer = setInterval(() => {
       setTypedChars((prev) => {
-        const next = prev + 16;
+        const next = prev + 20;
         if (next >= totalChars) {
           clearInterval(timer);
           setRevealedIds((rids) => new Set([...rids, typingMessageId]));
@@ -517,7 +533,7 @@ export default function SessionRoomClient() {
         }
         return next;
       });
-    }, 33); // ~300 chars/sec
+    }, 33); // ~600 chars/sec
     return () => clearInterval(timer);
   }, [typingMessageId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -985,7 +1001,7 @@ export default function SessionRoomClient() {
         const deliverableSpec: string = contract.deliverable_spec ?? room.deliverable_spec ?? "";
         let fullTask: string = room.task_description ?? "";
         if (fullTask && deliverableSpec) fullTask += `\n\nAcceptance criteria: ${deliverableSpec}`;
-        if (fullTask) setTaskDescription(fullTask);
+        if (fullTask) { setTaskDescription(fullTask); taskDescriptionRef.current = fullTask; }
 
         if (room.status && UI_STATUS[room.status]) {
           setStatus(UI_STATUS[room.status]);
@@ -1190,7 +1206,45 @@ export default function SessionRoomClient() {
     }
   }
 
+  // ── Coordinator plan generation (extracted so Retry button can re-invoke) ──
+
+  async function generateCoordinatorPlans(coordList: GraphNode[]) {
+    setCoordinatorPlanLoading(true);
+    setCoordinatorPlan(null);
+    setEditedAssignments([]);
+    const allNonCoord = graphNodesRef.current.filter(
+      (n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator",
+    );
+    try {
+      for (const coord of coordList) {
+        const scopedAgents = allNonCoord.filter((n) =>
+          coord.clusterId ? n.clusterId === coord.clusterId : !n.clusterId,
+        );
+        if (scopedAgents.length === 0) continue;
+        const body = { agent_ids: scopedAgents.map((n) => n.id), coordinator_id: coord.id };
+        try {
+          const res = await fetch(`${API}/rooms/${roomId}/coordinator/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (res.ok) {
+            const plan = await res.json();
+            setCoordinatorPlan(plan);
+            setEditedAssignments(plan.assignments ?? []);
+            coordinatorPlanRef.current = plan;
+            setActiveCoordinatorTab((prev) => prev ?? coord.id);
+          }
+        } catch { /* non-blocking per coordinator */ }
+      }
+    } catch { /* non-blocking */ }
+    setCoordinatorPlanLoading(false);
+  }
+
   async function callDemoAgents(humanText: string, sessionMessages: Message[]) {
+    if (agentLoopRunningRef.current) return; // prevent re-entry from mid-session human messages
+    agentLoopRunningRef.current = true;
+    try {
     // All non-human, non-Observer agents (Coordinators now included)
     console.log("[callDemoAgents] entry graphNodes:", graphNodesRef.current.map((n) => `${n.label}(role=${n.role},isBuilder=${n.isBuilder},isHuman=${n.isHuman})`));
     const allSessionAgents = sortAgentsByPriority(
@@ -1198,47 +1252,15 @@ export default function SessionRoomClient() {
     );
     const coordinators = allSessionAgents.filter((n) => n.role === "Coordinator");
     const agents = allSessionAgents.filter((n) => n.role !== "Coordinator");
-    if (agents.length === 0 && coordinators.length === 0) return;
+    if (agents.length === 0 && coordinators.length === 0) { agentLoopRunningRef.current = false; return; }
 
     // ── Coordinator pre-round plan ─────────────────────────────────────────
     // Only show the plan modal on the first invocation; skip on subsequent human messages
     if (coordinators.length > 0 && !coordinatorPlanDoneRef.current) {
-      setCoordinatorPlanLoading(true);
+      coordinatorsForRetryRef.current = coordinators;
       setShowCoordinatorPlan(true);
-      try {
-        const allNonCoord = graphNodesRef.current.filter(
-          (n) => !n.isHuman && n.role !== "Observer" && n.role !== "Coordinator",
-        );
-        // Call generate sequentially per coordinator so merging is deterministic
-        for (const coord of coordinators) {
-          const scopedAgents = allNonCoord.filter((n) =>
-            coord.clusterId ? n.clusterId === coord.clusterId : !n.clusterId,
-          );
-          if (scopedAgents.length === 0) continue;
-          const body = {
-            agent_ids: scopedAgents.map((n) => n.id),
-            coordinator_id: coord.id,
-          };
-          try {
-            const res = await fetch(`${API}/rooms/${roomId}/coordinator/generate`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            });
-            if (res.ok) {
-              const plan = await res.json();
-              // Each iteration returns the progressively merged plan
-              setCoordinatorPlan(plan);
-              setEditedAssignments(plan.assignments ?? []);
-              coordinatorPlanRef.current = plan;
-              // Set default tab to first coordinator
-              setActiveCoordinatorTab((prev) => prev ?? coord.id);
-            }
-          } catch { /* non-blocking per coordinator */ }
-        }
-      } catch { /* non-blocking */ }
-      setCoordinatorPlanLoading(false);
-      // Wait for user to confirm or skip
+      await generateCoordinatorPlans(coordinators);
+      // Wait for user to confirm, skip, or retry
       await new Promise<void>((resolve) => {
         coordinatorPlanResolveRef.current = resolve;
       });
@@ -1253,11 +1275,40 @@ export default function SessionRoomClient() {
       setMessages((prev) => [...prev, msg]);
     }
 
+    // Merge any humanDirect messages from messagesRef that aren't in the provided context.
+    // These are mid-session human messages sent while the agent loop was running.
+    function mergeHumanDirectMsgs(context: Message[]): Message[] {
+      const contextIds = new Set(context.map((m) => m.id));
+      const fresh = messagesRef.current.filter((m) => m.humanDirect && !contextIds.has(m.id));
+      return fresh.length > 0 ? [...context, ...fresh] : context;
+    }
+
     function getVisibleContext(agent: GraphNode, context: Message[], round?: string): Message[] {
+      // Always merge fresh humanDirect messages before filtering
+      const merged = mergeHumanDirectMsgs(context);
       const edges = graphEdgesRef.current;
+
+      // Determine which node IDs / labels the human is directly connected to
+      const humanNode = graphNodesRef.current.find((n) => n.isHuman);
+      const humanNeighborIds = humanNode
+        ? new Set(
+            edges
+              .filter((e) => e.fromId === humanNode.id || e.toId === humanNode.id)
+              .map((e) => (e.fromId === humanNode.id ? e.toId : e.fromId)),
+          )
+        : new Set<string>();
+      const agentIsHumanNeighbor = humanNode
+        ? humanNeighborIds.has(agent.id) ||
+          edges.some(
+            (e) =>
+              (e.fromId === humanNode.id && e.toId === agent.id) ||
+              (e.toId === humanNode.id && e.fromId === agent.id),
+          )
+        : true; // no human node → all agents see everything
+
       if (edges.length === 0) {
-        if (round) console.log(`[${round}] ${agent.label}: no edges → full context (${context.length} msgs)`);
-        return context;
+        if (round) console.log(`[${round}] ${agent.label}: no edges → full context (${merged.length} msgs)`);
+        return merged;
       }
       const neighborIds = new Set(
         edges
@@ -1265,8 +1316,8 @@ export default function SessionRoomClient() {
           .map((e) => (e.fromId === agent.id ? e.toId : e.fromId)),
       );
       if (neighborIds.size === 0) {
-        if (round) console.log(`[${round}] ${agent.label}: isolated node → full context (${context.length} msgs)`);
-        return context;
+        if (round) console.log(`[${round}] ${agent.label}: isolated node → full context (${merged.length} msgs)`);
+        return merged;
       }
 
       // Name-based fallback matching: edge IDs might not match message agentIds
@@ -1278,7 +1329,7 @@ export default function SessionRoomClient() {
       );
 
       if (round) {
-        const peerCtx = context.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
+        const peerCtx = merged.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
         console.log(
           `[${round}] ${agent.label} (id=${agent.id}) | ` +
           `edges=[${edges.map((e) => `${e.fromId}→${e.toId}`).join(" ")}] | ` +
@@ -1287,19 +1338,25 @@ export default function SessionRoomClient() {
         );
       }
 
-      const visible = context.filter(
-        (m) =>
-          m.isHuman ||
-          m.agentId === "system" ||
-          m.agentId === agent.id ||
-          neighborIds.has(m.agentId) ||
-          neighborLabels.has((m.agentName ?? "").toLowerCase()),
+      const visible = merged.filter(
+        (m) => {
+          // humanDirect messages: only show to agents directly connected to the human node
+          if (m.humanDirect) return agentIsHumanNeighbor;
+          // Regular human messages (e.g. initial task): always visible
+          if (m.isHuman) return true;
+          return (
+            m.agentId === "system" ||
+            m.agentId === agent.id ||
+            neighborIds.has(m.agentId) ||
+            neighborLabels.has((m.agentName ?? "").toLowerCase())
+          );
+        },
       );
 
       const peerMsgs = visible.filter((m) => !m.isHuman && m.agentId !== "system" && m.agentId !== agent.id);
 
       if (round) {
-        console.log(`[${round}] ${agent.label}: peer_msgs=${peerMsgs.length} visible=${visible.length} total_ctx=${context.length}`);
+        console.log(`[${round}] ${agent.label}: peer_msgs=${peerMsgs.length} visible=${visible.length} total_ctx=${merged.length}`);
         if (peerMsgs.length === 0) {
           console.warn(`[${round}] ${agent.label}: ZERO peer messages after filter → falling back to full context`);
         }
@@ -1308,7 +1365,7 @@ export default function SessionRoomClient() {
       // Fallback: if no peer messages got through (only human/system/self), return full context.
       // Over-sharing is better than an agent with zero peer context.
       if (peerMsgs.length === 0) {
-        return context;
+        return merged;
       }
 
       return visible;
@@ -1429,6 +1486,153 @@ export default function SessionRoomClient() {
       for (const a of agentList) postRoundState(a.id, "PENDING", round);
     };
 
+    // ── Coordinator round evaluation (Feature 8) ─────────────────────────────
+    // Called after each non-final round when a Coordinator is present.
+    // Returns "continue" (skip vote, open next round) or "done" (trigger vote).
+    async function coordinatorEvaluateRound(round: number, ctx: Message[]): Promise<"continue" | "done"> {
+      if (coordinators.length === 0) return "done"; // no coordinator → always vote
+      const coord = coordinators[0];
+      const agentIdToSend = isUUID(coord.id) ? coord.id : toDemoSlug(coord.label);
+
+      // Build summary: last message per agent
+      const agentSummaries = [...agents, ...coordinators]
+        .filter((a) => a.id !== coord.id)
+        .map((a) => {
+          const lastMsg = [...ctx].reverse().find((m) => m.agentId === a.id || m.agentName === a.label);
+          return lastMsg
+            ? `${a.label} (${a.role}): "${lastMsg.content.slice(0, 300)}"`
+            : `${a.label} (${a.role}): (no contribution yet)`;
+        })
+        .join("\n\n");
+
+      const evalPrompt =
+        `You are ${coord.label}, the session Coordinator.\n\n` +
+        `Original task:\n${humanText}\n\n` +
+        `Acceptance criteria (from session contract):\n${taskDescriptionRef.current || "(none specified)"}\n\n` +
+        `Summary of each agent's contribution so far:\n${agentSummaries || "(no contributions yet)"}\n\n` +
+        `This was Round ${round} of a maximum of ${maxRounds} rounds total. The next would be Round ${round + 1}.\n\n` +
+        `Evaluate whether the team's current output is sufficient to meet the acceptance criteria, or whether another round of work is needed.\n\n` +
+        `Reply with exactly one word: CONTINUE or DONE. ` +
+        `CONTINUE means the team needs another round to meet the acceptance criteria. ` +
+        `DONE means the work is sufficient and we should move to a vote on whether to proceed to the final round.`;
+
+      try {
+        const res = await fetch(`${API}/agents/respond`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room_id: roomId,
+            message: evalPrompt,
+            agent_id: agentIdToSend,
+            acting_as: { name: coord.label, role: coord.role },
+            session_messages: [],
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const raw: string = (data.response ?? data.message ?? data.content ?? "").trim().toUpperCase();
+          if (raw.startsWith("DONE")) {
+            addSystemMsg(`Coordinator assessment (Round ${round}): work is sufficient — initiating team vote.`);
+            return "done";
+          }
+          addSystemMsg(`Coordinator assessment (Round ${round}): more work needed — opening Round ${round + 1}.`);
+          return "continue";
+        }
+      } catch { /* fall through to vote */ }
+
+      // On error, fall back to vote
+      return "done";
+    }
+
+    // ── Round voting (Feature 1) ──────────────────────────────────────────────
+    // Called after each non-final round. Returns true = open another round.
+    async function runRoundVote(round: number, ctx: Message[]): Promise<boolean> {
+      setVoteRoundNumber(round);
+      setVoteResults([]);
+
+      const voteOrder = [
+        ...agents.filter((n) => n.role === "Contributor"),
+        ...agents.filter((n) => n.role === "Reviewer"),
+        ...coordinators,
+      ];
+      const accumulated: Array<{ voter: string; vote: "yes" | "no" }> = [];
+
+      // Summary of what was produced so far (last message per agent)
+      const agentSummary = voteOrder
+        .map((a) => {
+          const lastMsg = [...ctx].reverse().find((m) => m.agentId === a.id || m.agentName === a.label);
+          return lastMsg ? `${a.label} (${a.role}): "${lastMsg.content.slice(0, 200)}…"` : null;
+        })
+        .filter(Boolean)
+        .join("\n");
+
+      for (const voter of voteOrder) {
+        const votesSoFar = accumulated.map((v) => `${v.voter}: ${v.vote}`).join("\n");
+        const votePrompt =
+          `You are ${voter.label} (${voter.role}). A round just completed in this session.\n\n` +
+          `Original task: ${humanText}\n\n` +
+          `Contributions so far:\n${agentSummary || "(none yet)"}\n\n` +
+          `Votes cast so far:\n${votesSoFar || "(you are first)"}\n\n` +
+          `Should the team open another round to continue improving the work, or is the current output sufficient to proceed to the final deliverable?\n\n` +
+          `Reply with exactly one word: YES (open another round) or NO (proceed to final).`;
+
+        const agentIdToSend = isUUID(voter.id) ? voter.id : toDemoSlug(voter.label);
+        let vote: "yes" | "no" = "yes";
+        try {
+          const res = await fetch(`${API}/agents/respond`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              room_id: roomId,
+              message: votePrompt,
+              agent_id: agentIdToSend,
+              acting_as: { name: voter.label, role: voter.role },
+              session_messages: [],
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const raw: string = (data.response ?? data.message ?? data.content ?? "").trim().toUpperCase();
+            vote = raw.startsWith("NO") ? "no" : "yes";
+          }
+        } catch { /* default yes on error */ }
+        accumulated.push({ voter: voter.label, vote });
+        setVoteResults([...accumulated]);
+      }
+
+      // Determine final result
+      const humanNode = graphNodesRef.current.find((n) => n.isHuman);
+      let continueRound: boolean;
+      let finalVoter = "majority";
+
+      if (humanNode) {
+        // Human has final veto power — show banner and block
+        setShowVoteBanner(true);
+        const humanChoice = await new Promise<boolean>((resolve) => {
+          humanVoteResolverRef.current = resolve;
+        });
+        setShowVoteBanner(false);
+        continueRound = humanChoice;
+        finalVoter = "Human";
+      } else if (coordinators.length > 0) {
+        // Coordinator has final vote
+        const coordVote = accumulated.find((v) => coordinators.some((c) => c.label === v.voter));
+        continueRound = coordVote?.vote === "yes";
+        finalVoter = coordVote?.voter ?? "Coordinator";
+      } else {
+        // Simple majority
+        const yesCount = accumulated.filter((v) => v.vote === "yes").length;
+        continueRound = yesCount > accumulated.length / 2;
+        finalVoter = "majority";
+      }
+
+      const tally = accumulated.map((v) => `${v.voter}: ${v.vote.toUpperCase()}`).join(", ");
+      const verdict = continueRound ? "open another round" : "proceed to final";
+      addSystemMsg(`Round ${round} vote — [${tally}] — Decision by ${finalVoter}: ${verdict.toUpperCase()}`);
+
+      return continueRound;
+    }
+
     // ── ROUND 1: Independent analysis ────────────────────────────────────────
     // Coordinators go first (sequential), then workers parallel, then reviewers
     addSystemMsg("Round 1 — Independent analysis");
@@ -1478,6 +1682,7 @@ export default function SessionRoomClient() {
     let allMessages: Message[] = [...sessionMessages, ...r1Messages];
 
     // ── ROUNDS 2 through maxRounds-1: Cross-review (sequential) ──────────────
+    let jumpToFinal = false;
     for (let round = 2; round < maxRounds; round++) {
       addSystemMsg(`Round ${round} — Cross-review`);
       const allRoundAgents = [...coordinators, ...agents];
@@ -1501,6 +1706,28 @@ export default function SessionRoomClient() {
       roundsCompletedRef.current = round;
       allMessages = [...allMessages, ...roundMsgs];
       if (roundMsgs.length === 0) return;
+
+      // After each non-final round, evaluate continuation (Features 1 + 8)
+      // Skip if this round immediately precedes the final (loop will end naturally)
+      if (round < maxRounds - 1) {
+        if (coordinators.length > 0) {
+          // Coordinator evaluates first (Feature 8)
+          const coordDecision = await coordinatorEvaluateRound(round, allMessages);
+          if (coordDecision === "done") {
+            // Coordinator says done → run full vote (Feature 1)
+            const continueRound = await runRoundVote(round, allMessages);
+            if (!continueRound) { jumpToFinal = true; break; }
+          }
+          // coordDecision === "continue" → loop continues automatically (no vote)
+        } else {
+          // No coordinator → vote after every round (Feature 1 fallback)
+          const continueRound = await runRoundVote(round, allMessages);
+          if (!continueRound) { jumpToFinal = true; break; }
+        }
+      }
+    }
+    if (jumpToFinal) {
+      addSystemMsg("Vote result: proceeding directly to final round.");
     }
 
     // ── Final round: summaries → Builder assembles deliverable ────────────────
@@ -1590,6 +1817,9 @@ export default function SessionRoomClient() {
     }
 
     roundsCompletedRef.current = maxRounds;
+    } finally {
+      agentLoopRunningRef.current = false;
+    }
   }
 
   // ── Poll helpers ─────────────────────────────────────────────────────────
@@ -1687,8 +1917,9 @@ export default function SessionRoomClient() {
 
   async function sendMessage() {
     const text = inputText.trim();
-    if (!text || sending || showFailureModal || isPaused) return;
-    setSending(true);
+    if (!text || showFailureModal || isPaused) return;
+
+    const loopRunning = agentLoopRunningRef.current;
 
     const msg: Message = {
       id: `local-${Date.now()}`,
@@ -1701,9 +1932,11 @@ export default function SessionRoomClient() {
       sigValid: true,
       ts: new Date().toISOString(),
       isHuman: true,
+      // Mark as direct mid-session injection if agents are currently running
+      ...(loopRunning ? { humanDirect: true } : {}),
     };
 
-    const updatedMessages = [...messages, msg];
+    const updatedMessages = [...messagesRef.current, msg];
     setMessages(updatedMessages);
     setInputText("");
 
@@ -1724,9 +1957,13 @@ export default function SessionRoomClient() {
       wsRef.current.send(JSON.stringify({ type: "message", data: msg }));
     }
 
-    // Trigger demo agent responses for each non-human Contributor
-    await callDemoAgents(text, updatedMessages);
-    setSending(false);
+    // If agents are already running, the message is injected as context for
+    // the next agent's turn via mergeHumanDirectMsgs. Don't re-trigger the loop.
+    if (!loopRunning) {
+      setSending(true);
+      await callDemoAgents(text, updatedMessages);
+      setSending(false);
+    }
   }
 
   // ── Agent failure handlers ────────────────────────────────────────────────
@@ -2126,6 +2363,37 @@ export default function SessionRoomClient() {
         </div>
       </header>
 
+      {/* Round vote banner (Feature 1) */}
+      {showVoteBanner && (
+        <div className="shrink-0 z-20 flex items-center justify-between gap-4 px-5 py-3 border-b border-[#4ECDC4]/30" style={{ background: "rgba(78,205,196,0.06)" }}>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-al-accent">Round {voteRoundNumber} complete</p>
+            <p className="text-xs text-al-muted mt-0.5">Open another round to continue refining?</p>
+            {voteResults.length > 0 && (
+              <p className="text-[11px] text-al-muted mt-1">
+                Agent votes: {voteResults.map((v) => `${v.voter} → ${v.vote.toUpperCase()}`).join(" · ")}
+              </p>
+            )}
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={() => { humanVoteResolverRef.current?.(false); }}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
+              style={{ background: "rgba(100,116,139,0.12)", border: "1px solid rgba(100,116,139,0.35)", color: "#94A3B8" }}
+            >
+              No — go to final
+            </button>
+            <button
+              onClick={() => { humanVoteResolverRef.current?.(true); }}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
+              style={{ background: "rgba(78,205,196,0.14)", border: "1px solid rgba(78,205,196,0.45)", color: "#4ECDC4" }}
+            >
+              Yes — open Round {voteRoundNumber + 1}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Demo limit banner */}
       {demoLimitReached && (
         <div className="shrink-0 flex items-center justify-between gap-4 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/30">
@@ -2373,13 +2641,12 @@ export default function SessionRoomClient() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
                   }}
-                  placeholder="Send a message…"
-                  disabled={sending}
-                  className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors disabled:opacity-50"
+                  placeholder={agentLoopRunningRef.current ? "Message queued for next agent turn…" : "Send a message…"}
+                  className="flex-1 bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-sm text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
                 />
                 <button
                   onClick={sendMessage}
-                  disabled={sending || !inputText.trim()}
+                  disabled={!inputText.trim()}
                   className="px-4 py-1.5 bg-al-accent text-al-bg rounded-lg text-sm font-semibold hover:bg-al-accent-dim active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
                   {sending && (
@@ -2822,7 +3089,25 @@ export default function SessionRoomClient() {
                 {!isMultiCoord && <p className="text-[11px] text-al-muted text-center">You can edit any subtask above before confirming.</p>}
               </div>
             ) : (
-              <p className="text-sm text-al-muted py-4 text-center">Could not generate plan — skip to proceed without subtask assignment.</p>
+              <div className="py-4 text-center space-y-3">
+                <p className="text-sm text-al-muted">Could not generate plan — retry or skip to proceed without subtask assignment.</p>
+                <button
+                  onClick={() => generateCoordinatorPlans(coordinatorsForRetryRef.current)}
+                  disabled={coordinatorPlanLoading || confirmingPlan}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ background: "rgba(255,107,53,0.12)", border: "1px solid rgba(255,107,53,0.4)", color: "#FF6B35" }}
+                >
+                  {coordinatorPlanLoading ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                      </svg>
+                      Retrying…
+                    </>
+                  ) : "Retry"}
+                </button>
+              </div>
             )}
 
             <div className="flex gap-3">
@@ -2999,7 +3284,7 @@ function renderMarkdown(text: string): string {
     const idx = codeBlocks.length;
     const langAttr = lang ? ` data-lang="${escMd(lang)}"` : "";
     codeBlocks.push(
-      `<pre${langAttr} style="background:#070e1a;border:1px solid #1E2D4A;border-radius:8px;padding:12px 14px;overflow-x:auto;margin:8px 0"><code style="font-family:monospace;font-size:0.8em;color:#93c5fd;white-space:pre">${escMd(code.replace(/\n$/, ""))}</code></pre>`
+      `<pre${langAttr} style="background:#070e1a;border:1px solid #1E2D4A;border-radius:8px;padding:12px 14px;overflow-x:auto;overflow-y:auto;max-height:400px;margin:8px 0"><code style="font-family:monospace;font-size:0.8em;color:#93c5fd;white-space:pre">${escMd(code.replace(/\n$/, ""))}</code></pre>`
     );
     return `\x00BLOCK${idx}\x00`;
   });
