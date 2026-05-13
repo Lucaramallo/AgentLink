@@ -107,18 +107,19 @@ def build_role_system_prompt(
 
     r = role.lower()
 
-    if r == "coordinator" and is_builder and is_final:
+    if is_builder and is_final:
         rn_block = ""
         if rn_context:
-            rn_block = f"\n\nTeam summaries for assembly:\n\n{rn_context}"
+            rn_block = (
+                "\n\nFinal round summaries from the team (use these to assemble the deliverable):\n\n"
+                f"{rn_context}"
+            )
         instructions = (
-            "You are both the Coordinator and the Builder for this session. In this final round:\n"
-            "1. First, as Coordinator: verify that all Contributors have delivered their summaries "
-            "and the Reviewer has completed their assessment. Confirm the team is ready.\n"
-            "2. Then, as Builder: using your specialty and ALL the summaries and assessments "
-            "provided below as context, assemble the final deliverable. This is your primary "
-            "output — produce the complete, polished deliverable now.\n"
-            "3. Mark your message as DELIVERABLE.\n"
+            "In this final round you are acting exclusively as the Builder. "
+            "Your Contributor role is suspended. "
+            "Your ONLY job is to assemble the final deliverable using all the summaries and context provided. "
+            "Do not add new analysis. Do not comment on others' work. "
+            "Produce the complete deliverable now and mark it as DELIVERABLE."
             f"{rn_block}"
         )
 
