@@ -9,7 +9,7 @@ import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
 import { useAuth } from "../../lib/auth";
 
-const API_BASE = "http://192.168.0.108:8000/api/v1";
+const API_BASE = "http://127.0.0.1:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
 const OWNER_B = "7059dca2-afe8-4908-9e69-b2451b0be356";
 

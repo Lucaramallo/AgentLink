@@ -8,7 +8,7 @@ import AgentCard from "../components/AgentCard";
 import BuildSessionPanel from "../components/BuildSessionPanel";
 import { useAuth } from "../lib/auth";
 
-const API_BASE = "http://192.168.0.108:8000/api/v1";
+const API_BASE = "http://127.0.0.1:8000/api/v1";
 
 interface TeamTemplate {
   id: string;
