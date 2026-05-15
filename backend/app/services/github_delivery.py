@@ -1,6 +1,7 @@
 """GitHub delivery service — pushes session deliverables to GitHub."""
 
 import base64
+import logging
 import uuid
 
 import httpx
@@ -8,13 +9,16 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 _fernet = Fernet(settings.github_token_encryption_key.encode())
 
 
 def _decrypt_token(encrypted: str) -> str:
     try:
         return _fernet.decrypt(encrypted.encode()).decode()
-    except (InvalidToken, Exception):
+    except (InvalidToken, Exception) as exc:
+        logger.error("github_delivery: token decryption failed: %s", exc)
         return ""
 
 
@@ -44,6 +48,13 @@ async def deliver_to_github(
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
+    logger.info(
+        "github_delivery: using token prefix=%s... username=%s repo=%s",
+        token[:6] if token else "EMPTY",
+        github_username,
+        existing_repo_url,
+    )
+
     async with httpx.AsyncClient(timeout=30) as client:
         if existing_repo_url:
             # MODE A: push to existing repo
@@ -52,10 +63,23 @@ async def deliver_to_github(
             repo_url = f"https://github.com/{repo_path}"
 
             repo_resp = await client.get(api_base, headers=headers)
+            if repo_resp.status_code == 401:
+                body = repo_resp.text[:300]
+                logger.error("github_delivery: 401 unauthorized. body=%s", body)
+                raise ValueError(
+                    f"GitHub token rejected (401). Reconnect your GitHub account. Detail: {body}"
+                )
             if repo_resp.status_code == 404:
-                raise ValueError("Repository not found or no access.")
+                body = repo_resp.text[:300]
+                logger.error("github_delivery: 404 for repo=%s body=%s", repo_path, body)
+                raise ValueError(
+                    f"Repository not found or no access (404). "
+                    f"Repo: {repo_path}. Ensure the token has 'repo' scope. Detail: {body}"
+                )
             if repo_resp.status_code != 200:
-                raise ValueError(f"GitHub API error: {repo_resp.status_code}")
+                body = repo_resp.text[:300]
+                logger.error("github_delivery: status=%s body=%s", repo_resp.status_code, body)
+                raise ValueError(f"GitHub API error: {repo_resp.status_code}. Detail: {body}")
 
             default_branch = repo_resp.json()["default_branch"]
             ref_resp = await client.get(f"{api_base}/git/ref/heads/{default_branch}", headers=headers)

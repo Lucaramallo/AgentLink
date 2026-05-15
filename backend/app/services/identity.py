@@ -15,6 +15,16 @@ class KeyPair:
     private_key_b64: str  # Solo se entrega UNA VEZ al dueño; nunca almacenar en BD
 
 
+def _normalize_key_bytes(key: "str | bytes") -> bytes:
+    """Return 32 raw bytes from a hex string, base64 string, or raw bytes."""
+    if isinstance(key, bytes):
+        return key
+    # 64 hex chars → 32 bytes (SERVER_SIGNING_KEY stored as hex in .env)
+    if len(key) == 64 and all(c in "0123456789abcdefABCDEF" for c in key):
+        return bytes.fromhex(key)
+    return base64.b64decode(key)
+
+
 def generate_keypair() -> KeyPair:
     """Genera un nuevo keypair ed25519 para un agente.
 
@@ -34,13 +44,13 @@ def sign_message(private_key_b64: str, message: str) -> str:
     """Firma un mensaje con la clave privada del agente.
 
     Args:
-        private_key_b64: Clave privada en base64.
+        private_key_b64: Clave privada en base64 o hex (SERVER_SIGNING_KEY).
         message: Contenido a firmar.
 
     Returns:
         Firma en base64.
     """
-    private_key_bytes = base64.b64decode(private_key_b64)
+    private_key_bytes = _normalize_key_bytes(private_key_b64)
     signing_key = nacl.signing.SigningKey(private_key_bytes)
     signed = signing_key.sign(message.encode("utf-8"))
     # signed.signature es solo la firma, no el mensaje
