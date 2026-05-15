@@ -37,24 +37,40 @@ async def generate_coordinator_plan(
     task_description = room.contract.task_description if room.contract else "No task description."
     agents = room.session_graph.get("agents", [])
 
-    # Only include non-Coordinator, non-human, non-Observer agents in the plan
+    # Find the Coordinator agent in the graph so it can be included in its own plan
+    coordinator_agent = next(
+        (a for a in agents if a.get("role", "") == "Coordinator" and not a.get("is_human", False)),
+        None,
+    )
+
+    # Include all non-human, non-Observer agents (Coordinator now included)
     assignable = [
         a for a in agents
         if not a.get("is_human", False)
-        and a.get("role", "") not in ("Coordinator", "Observer")
+        and a.get("role", "") not in ("Observer",)
     ]
 
-    # Restrict to the provided scope when given
+    # Restrict to the provided scope; always re-add the Coordinator so it gets its own subtask
     if agent_ids is not None:
         assignable = [a for a in assignable if a["id"] in agent_ids]
+        if coordinator_agent and not any(a["id"] == coordinator_agent["id"] for a in assignable):
+            assignable.insert(0, coordinator_agent)
 
     if not assignable:
         raise ValueError("No assignable agents found in session graph.")
 
-    agents_list = "\n".join(
-        f'- id="{a["id"]}" name="{a.get("name", a["id"])}" role="{a.get("role", "Contributor")}"'
-        for a in assignable
-    )
+    def _agent_line(a: dict) -> str:
+        role = a.get("role", "Contributor")
+        name = a.get("name", a["id"])
+        suffix = (
+            " [COORDINATOR — must receive a BUILD subtask: what this agent will personally"
+            " assemble or produce in the final round]"
+            if role == "Coordinator"
+            else ""
+        )
+        return f'- id="{a["id"]}" name="{name}" role="{role}"{suffix}'
+
+    agents_list = "\n".join(_agent_line(a) for a in assignable)
 
     from app.config import settings
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key if settings.anthropic_api_key else None)
@@ -63,12 +79,17 @@ async def generate_coordinator_plan(
         "You are a Coordinator AI that decomposes a task into focused subtasks for a team of agents. "
         "Respond ONLY with valid JSON matching exactly: "
         '{"assignments": [{"agent_id": "<id>", "agent_name": "<name>", "subtask": "<1-2 sentence focused subtask>"}], '
-        '"summary": "<one paragraph team coordination summary>"}'
+        '"summary": "<paragraph that explicitly names each agent, states their role, and describes their assigned subtask — '
+        'including the Coordinator\'s own build subtask>"}'
     )
     user_msg = (
         f"Task: {task_description}\n\n"
         f"Team agents:\n{agents_list}\n\n"
         "Generate a concise subtask for each agent based on their role and the overall task. "
+        "The agent marked [COORDINATOR] must receive a BUILD subtask describing what it will personally "
+        "assemble or produce in the final round "
+        "(e.g. 'Assemble all team contributions into the final polished HTML deliverable'). "
+        "The summary field must explicitly state each agent's name, role, and assigned subtask. "
         "Each subtask should be specific, actionable, and complement the other agents' work. "
         "Respond ONLY with the JSON."
     )

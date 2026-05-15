@@ -252,7 +252,7 @@ async def submit_verdict(
     if payload.verdict == "CONFORME":
         from app.services.dataset_service import collect_session_data as _collect
         import asyncio as _asyncio
-        _asyncio.create_task(_collect(db=db, room_id=room_id, outcome="CONFORME"))
+        _asyncio.create_task(_collect(room_id=room_id, outcome="CONFORME"))
 
     return {"room_id": str(room.room_id), "status": room.status, "outcome": room.outcome}
 

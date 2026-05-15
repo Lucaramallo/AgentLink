@@ -97,7 +97,6 @@ async def submit_session_feedback(
 
     asyncio.create_task(
         collect_session_data(
-            db=db,
             room_id=payload.session_id,
             outcome=outcome,
             feedback=feedback,

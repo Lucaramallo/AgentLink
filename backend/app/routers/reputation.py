@@ -196,7 +196,6 @@ async def session_reputation_update(
 
         _asyncio.create_task(
             _update_ratings(
-                db=db,
                 room_id=_uuid.UUID(payload.room_id),
                 human_team_rating=_human_team,
                 average_peer_rating=_avg_peer,

@@ -112,7 +112,7 @@ def _verify_oauth_state(state: str) -> uuid.UUID:
             raise ValueError("invalid type")
         return uuid.UUID(payload["sub"])
     except Exception:
-        raise HTTPException(status_code=400, detail="OAuth state inválido o expirado.")
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ async def register(body: RegisterIn, db: Annotated[AsyncSession, Depends(get_db)
     """Registra un nuevo usuario y retorna JWT."""
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email ya registrado.")
+        raise HTTPException(status_code=400, detail="Email already registered.")
 
     user = User(
         email=body.email,
@@ -149,7 +149,7 @@ async def login(body: LoginIn, db: Annotated[AsyncSession, Depends(get_db)]) -> 
     if not user or not _verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales inválidas.",
+            detail="Invalid credentials.",
         )
 
     token = create_access_token(user.id)
@@ -210,10 +210,10 @@ async def github_oauth_start(
 ) -> dict:
     """Returns the GitHub OAuth authorization URL. Requires JWT."""
     if not settings.github_client_id:
-        raise HTTPException(status_code=503, detail="GitHub OAuth no configurado.")
+        raise HTTPException(status_code=503, detail="GitHub OAuth not configured.")
 
     state = _create_oauth_state(current_user.id)
-    callback_uri = f"{settings.frontend_url}/auth/github/callback"
+    callback_uri = settings.github_redirect_uri
     url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.github_client_id}"
@@ -235,7 +235,7 @@ async def github_oauth_callback(
 
     user = await db.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+        raise HTTPException(status_code=404, detail="User not found.")
 
     # Exchange code for access token
     async with httpx.AsyncClient() as client:
@@ -251,7 +251,7 @@ async def github_oauth_callback(
         )
 
     if token_resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Error obteniendo token de GitHub.")
+        raise HTTPException(status_code=502, detail="Error obtaining GitHub token.")
 
     token_data = token_resp.json()
     access_token = token_data.get("access_token")
@@ -270,7 +270,7 @@ async def github_oauth_callback(
         )
 
     if user_resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Error obteniendo perfil de GitHub.")
+        raise HTTPException(status_code=502, detail="Error obtaining GitHub profile.")
 
     gh_user = user_resp.json()
 
@@ -291,11 +291,11 @@ async def github_get_repos(
 ) -> list[GithubRepoOut]:
     """Returns user's GitHub repos using their stored access token."""
     if not current_user.github_access_token:
-        raise HTTPException(status_code=400, detail="GitHub no conectado. Conecta tu cuenta primero.")
+        raise HTTPException(status_code=400, detail="GitHub not connected. Connect your account first.")
 
     access_token = _decrypt_token(current_user.github_access_token)
     if not access_token:
-        raise HTTPException(status_code=400, detail="Token de GitHub inválido. Reconecta tu cuenta.")
+        raise HTTPException(status_code=400, detail="Invalid GitHub token. Reconnect your account.")
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -309,7 +309,7 @@ async def github_get_repos(
         )
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Error obteniendo repos de GitHub.")
+        raise HTTPException(status_code=502, detail="Error obtaining GitHub repos.")
 
     repos = resp.json()
     return [

@@ -527,7 +527,7 @@ export default function SessionRoomClient() {
     const totalChars = msg.content.length;
     const timer = setInterval(() => {
       setTypedChars((prev) => {
-        const next = prev + 20;
+        const next = prev + 26;
         if (next >= totalChars) {
           clearInterval(timer);
           setRevealedIds((rids) => new Set([...rids, typingMessageId]));
