@@ -58,7 +58,7 @@ async def deliver_to_github(
     async with httpx.AsyncClient(timeout=30) as client:
         if existing_repo_url:
             # MODE A: push to existing repo
-            repo_path = existing_repo_url.rstrip("/").replace("https://github.com/", "")
+            repo_path = existing_repo_url.rstrip("/").replace("https://github.com/", "").removesuffix(".git")
             api_base = f"https://api.github.com/repos/{repo_path}"
             repo_url = f"https://github.com/{repo_path}"
 
