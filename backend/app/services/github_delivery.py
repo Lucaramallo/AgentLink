@@ -138,31 +138,40 @@ async def deliver_to_github(
             f"{rows}\n"
         )
 
-        commit_count = 0
-        files = [
-            ("DELIVERABLE.md", deliverable_content, "feat", "session deliverable"),
-            ("SESSION_LOG.md", session_log, "docs", "full session log"),
-            ("CONTRIBUTORS.md", contributors_md, "docs", "contributors"),
-        ]
-
         # Author for deliverable commit: last builder/contributor agent
         builders = [a for a in agents_contributions if a.get("role") in ("Builder", "Contributor")]
         author_name = builders[-1]["name"] if builders else "AgentLink"
         author_slug = author_name.lower().replace(" ", "")
 
-        for i, (path, content, prefix, label) in enumerate(files):
-            agent_name = author_name if i == 0 else "AgentLink System"
-            agent_email = f"{author_slug}@agentlink.ai" if i == 0 else "system@agentlink.ai"
-            resp = await client.put(
-                f"{api_base}/contents/{path}",
-                headers=headers,
-                json={
-                    "message": f"{prefix}: session {id_short} {label}",
-                    "content": _b64(content),
-                    "branch": branch_name,
-                    "author": {"name": agent_name, "email": agent_email},
-                },
+        folder = f"sessions/{room_id}"
+        agent_names_str = ", ".join(a["name"] for a in agents_contributions) if agents_contributions else "AgentLink"
+        commit_message = f"AgentLink session {id_short} — {agent_names_str}"
+
+        commit_count = 0
+        files = [
+            (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
+            (f"{folder}/SESSION_LOG.md", session_log, "AgentLink System", "system@agentlink.ai"),
+            (f"{folder}/CONTRIBUTORS.md", contributors_md, "AgentLink System", "system@agentlink.ai"),
+        ]
+
+        for path, content, agent_name, agent_email in files:
+            existing_sha = None
+            check = await client.get(
+                f"{api_base}/contents/{path}", headers=headers, params={"ref": branch_name}
             )
+            if check.status_code == 200:
+                existing_sha = check.json().get("sha")
+
+            payload: dict = {
+                "message": commit_message,
+                "content": _b64(content),
+                "branch": branch_name,
+                "author": {"name": agent_name, "email": agent_email},
+            }
+            if existing_sha:
+                payload["sha"] = existing_sha
+
+            resp = await client.put(f"{api_base}/contents/{path}", headers=headers, json=payload)
             if resp.status_code in (200, 201):
                 commit_count += 1
 
