@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { SessionRole } from "../../lib/types";
 import { useCredits } from "../../lib/credits";
-import { agentDropped } from "../../lib/api";
+import { agentDropped, fetchGithubOAuthUrl } from "../../lib/api";
 import { useAuth, type AuthUser } from "../../lib/auth";
 import PollCard, { type PollType } from "./PollCard";
 
@@ -1224,7 +1224,6 @@ export default function SessionRoomClient() {
 
   function handleOAuthSuccess() {
     setGithubConnectionFailed(false);
-    setTimeout(() => pushToGitHub(), 50);
   }
 
   // ── Coordinator plan generation (extracted so Retry button can re-invoke) ──
@@ -3962,7 +3961,7 @@ function CloseModal({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const { token: authToken, login } = useAuth();
+  const { login } = useAuth();
   const [inlineRepo, setInlineRepo] = useState("");
   const [inlineSaving, setInlineSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
@@ -3986,19 +3985,13 @@ function CloseModal({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleOAuthRedirect() {
-    if (!authToken) { setOauthError("You must be logged in."); return; }
     setOauthLoading(true);
     setOauthError(null);
     try {
-      const res = await fetch(`${API}/auth/github`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (!res.ok) throw new Error("Could not start GitHub OAuth.");
-      const { url } = await res.json();
+      const url = await fetchGithubOAuthUrl();
+      if (!url) throw new Error("Could not start GitHub OAuth.");
       const popup = window.open(url, "github-oauth", "width=600,height=700,left=300,top=100");
-      if (!popup) {
-        throw new Error("Popup blocked. Please allow popups for this site and try again.");
-      }
+      if (!popup) throw new Error("Popup blocked. Please allow popups for this site and try again.");
     } catch (err) {
       setOauthError(err instanceof Error ? err.message : "GitHub OAuth failed.");
       setOauthLoading(false);
