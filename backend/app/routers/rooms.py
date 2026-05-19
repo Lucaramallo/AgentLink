@@ -849,6 +849,345 @@ async def update_coordinator_plan(
     return plan
 
 
+# --- GitHub Repo Active Input ---
+
+class RepoInitPayload(BaseModel):
+    strategy: str = "branch"  # "branch" | "main"
+
+
+class RepoCommitPayload(BaseModel):
+    file_path: str
+    content: str
+    commit_message: str
+    agent_id: str
+
+
+@router.post("/{room_id}/repo/init")
+async def init_repo(
+    room_id: uuid.UUID,
+    payload: RepoInitPayload,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Initialize repo access for a session: create branch (or use main), fetch tree."""
+    from app.services.github_repo import (
+        create_session_branch,
+        get_repo_tree,
+    )
+    from datetime import timezone
+
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    if not room.github_repo_url:
+        raise HTTPException(status_code=400, detail="No GitHub repo URL set for this room.")
+    if not current_user.github_access_token:
+        raise HTTPException(status_code=400, detail="GitHub account not connected.")
+
+    strategy = payload.strategy if payload.strategy in ("branch", "main") else "branch"
+
+    try:
+        tree_data = await get_repo_tree(current_user.github_access_token, room.github_repo_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub tree fetch failed: {exc}")
+
+    if strategy == "branch":
+        try:
+            branch = await create_session_branch(
+                current_user.github_access_token, room.github_repo_url, str(room_id)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Branch creation failed: {exc}")
+    else:
+        branch = tree_data["default_branch"]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    room.repo_branch = branch
+    room.repo_branch_strategy = strategy
+    room.repo_tree = {
+        "items": tree_data["items"],
+        "truncated": tree_data["truncated"],
+        "fetched_at": now_iso,
+    }
+
+    repo_path = room.github_repo_url.rstrip("/").replace("https://github.com/", "").removesuffix(".git")
+    if strategy == "branch":
+        branch_url = f"https://github.com/{repo_path}/tree/{branch}"
+    else:
+        branch_url = f"https://github.com/{repo_path}"
+
+    # Log immutable SYSTEM message
+    event_text = (
+        f"[REPO_INIT] GitHub repository linked.\n"
+        f"Repo: {room.github_repo_url}\n"
+        f"Branch: {branch}\n"
+        f"Strategy: {strategy}\n"
+        f"Files indexed: {len(tree_data['items'])}"
+        f"{' (truncated)' if tree_data['truncated'] else ''}"
+    )
+    sig = sign_message(settings.server_signing_key, event_text)
+    sys_msg = Message(
+        room_id=room_id,
+        sender_agent_id=_system_agent_id(room),
+        content_natural=event_text,
+        content_structured={"type": "repo_init", "branch": branch, "strategy": strategy, "branch_url": branch_url},
+        signature=sig,
+        message_type=MessageType.SYSTEM,
+    )
+    db.add(sys_msg)
+    await db.flush()
+    await db.commit()
+
+    try:
+        from app.routers.websocket import manager as ws_manager
+        await ws_manager.broadcast(str(room_id), {
+            "type": "message",
+            "data": {
+                "id": str(sys_msg.message_id),
+                "agentId": str(sys_msg.sender_agent_id),
+                "agentName": "AgentLink",
+                "agentOrg": "Protocol",
+                "role": "Observer",
+                "type": "SYSTEM",
+                "content": event_text,
+                "sigValid": True,
+                "ts": sys_msg.timestamp.isoformat() if sys_msg.timestamp else None,
+                "contentStructured": sys_msg.content_structured,
+            },
+        })
+    except Exception:
+        pass
+
+    return {
+        "branch": branch,
+        "branch_url": branch_url,
+        "strategy": strategy,
+        "tree_items": tree_data["items"],
+        "truncated": tree_data["truncated"],
+    }
+
+
+@router.get("/{room_id}/repo/tree")
+async def get_repo_tree_endpoint(
+    room_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return the cached repo tree for this room."""
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    if not room.repo_tree:
+        return {"branch": room.repo_branch, "items": [], "truncated": False}
+    return {
+        "branch": room.repo_branch,
+        "strategy": room.repo_branch_strategy,
+        "items": room.repo_tree.get("items", []),
+        "truncated": room.repo_tree.get("truncated", False),
+        "fetched_at": room.repo_tree.get("fetched_at"),
+    }
+
+
+@router.get("/{room_id}/repo/file")
+async def get_repo_file(
+    room_id: uuid.UUID,
+    path: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Fetch content of a specific file from the session repo branch."""
+    from app.services.github_repo import get_file_content
+
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    if not room.github_repo_url or not room.repo_branch:
+        raise HTTPException(status_code=400, detail="Repo not initialized for this session.")
+    if not current_user.github_access_token:
+        raise HTTPException(status_code=400, detail="GitHub account not connected.")
+
+    try:
+        content = await get_file_content(
+            current_user.github_access_token, room.github_repo_url, path, room.repo_branch
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"File fetch failed: {exc}")
+
+    return {"path": path, "content": content, "branch": room.repo_branch}
+
+
+@router.post("/{room_id}/repo/commit")
+async def commit_to_repo(
+    room_id: uuid.UUID,
+    payload: RepoCommitPayload,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Commit a file to the session branch. Logs immutable SYSTEM message and broadcasts WS event."""
+    from app.services.github_repo import commit_file
+
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    if not room.github_repo_url or not room.repo_branch:
+        raise HTTPException(status_code=400, detail="Repo not initialized for this session.")
+    if not current_user.github_access_token:
+        raise HTTPException(status_code=400, detail="GitHub account not connected.")
+
+    # Resolve agent name/role from session graph
+    agent_name = "Agent"
+    agent_role = "Contributor"
+    if room.session_graph:
+        agents: list[dict] = room.session_graph.get("agents", [])
+        agent_node = next((a for a in agents if str(a.get("id", "")) == payload.agent_id), None)
+        if agent_node:
+            agent_name = agent_node.get("name", "Agent")
+            agent_role = agent_node.get("role", "Contributor")
+
+    try:
+        commit_sha = await commit_file(
+            github_token_encrypted=current_user.github_access_token,
+            repo_url=room.github_repo_url,
+            branch=room.repo_branch,
+            file_path=payload.file_path,
+            content=payload.content,
+            agent_name=agent_name,
+            agent_role=agent_role,
+            message=payload.commit_message,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Commit failed: {exc}")
+
+    repo_path = room.github_repo_url.rstrip("/").replace("https://github.com/", "").removesuffix(".git")
+    commit_url = f"https://github.com/{repo_path}/commit/{commit_sha}" if commit_sha else ""
+
+    event_text = (
+        f"[REPO_COMMIT] {agent_name} ({agent_role}) committed {payload.file_path}\n"
+        f"Message: {payload.commit_message}\n"
+        f"SHA: {commit_sha[:7] if commit_sha else 'unknown'}"
+    )
+    sig = sign_message(settings.server_signing_key, event_text)
+    sys_msg = Message(
+        room_id=room_id,
+        sender_agent_id=_system_agent_id(room),
+        content_natural=event_text,
+        content_structured={
+            "type": "repo_commit",
+            "agent_name": agent_name,
+            "agent_role": agent_role,
+            "file_path": payload.file_path,
+            "commit_message": payload.commit_message,
+            "commit_sha": commit_sha,
+            "commit_url": commit_url,
+            "branch": room.repo_branch,
+        },
+        signature=sig,
+        message_type=MessageType.SYSTEM,
+    )
+    db.add(sys_msg)
+    await db.flush()
+    await db.commit()
+
+    commit_data = {
+        "agent_name": agent_name,
+        "agent_role": agent_role,
+        "file_path": payload.file_path,
+        "commit_message": payload.commit_message,
+        "commit_sha": commit_sha,
+        "commit_url": commit_url,
+        "branch": room.repo_branch,
+        "message_id": str(sys_msg.message_id),
+        "ts": sys_msg.timestamp.isoformat() if sys_msg.timestamp else None,
+    }
+
+    try:
+        from app.routers.websocket import manager as ws_manager
+        await ws_manager.broadcast(str(room_id), {"type": "repo_commit", "data": commit_data})
+        # Also broadcast the SYSTEM message into the chat
+        await ws_manager.broadcast(str(room_id), {
+            "type": "message",
+            "data": {
+                "id": str(sys_msg.message_id),
+                "agentId": str(sys_msg.sender_agent_id),
+                "agentName": agent_name,
+                "agentOrg": agent_role,
+                "role": "Observer",
+                "type": "SYSTEM",
+                "content": event_text,
+                "sigValid": True,
+                "ts": sys_msg.timestamp.isoformat() if sys_msg.timestamp else None,
+                "contentStructured": sys_msg.content_structured,
+            },
+        })
+    except Exception:
+        pass
+
+    return {"commit_sha": commit_sha, "branch": room.repo_branch, "file_path": payload.file_path, "commit_url": commit_url}
+
+
+@router.post("/{room_id}/repo/merge")
+async def merge_repo_branch(
+    room_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Merge the session branch into main. Requires room to be CLOSED+SUCCESS."""
+    from app.services.github_repo import merge_branch_to_main
+
+    room = await db.get(Room, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    if not room.github_repo_url or not room.repo_branch:
+        raise HTTPException(status_code=400, detail="Repo not initialized for this session.")
+    if room.repo_branch_strategy != "branch":
+        raise HTTPException(status_code=400, detail="Session is not using a separate branch.")
+    if not current_user.github_access_token:
+        raise HTTPException(status_code=400, detail="GitHub account not connected.")
+    if not (room.status == RoomStatus.CLOSED and room.outcome == RoomOutcome.SUCCESS):
+        raise HTTPException(status_code=400, detail="Room must be CLOSED with SUCCESS outcome to merge.")
+
+    try:
+        merge_sha = await merge_branch_to_main(
+            current_user.github_access_token, room.github_repo_url, room.repo_branch
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Merge failed: {exc}")
+
+    event_text = (
+        f"[REPO_MERGE] Session branch merged to main.\n"
+        f"Branch: {room.repo_branch}\n"
+        f"SHA: {merge_sha[:7] if merge_sha else 'up-to-date'}"
+    )
+    sig = sign_message(settings.server_signing_key, event_text)
+    sys_msg = Message(
+        room_id=room_id,
+        sender_agent_id=_system_agent_id(room),
+        content_natural=event_text,
+        content_structured={"type": "repo_merge", "branch": room.repo_branch, "merge_sha": merge_sha},
+        signature=sig,
+        message_type=MessageType.SYSTEM,
+    )
+    db.add(sys_msg)
+    await db.flush()
+    await db.commit()
+
+    repo_path = room.github_repo_url.rstrip("/").replace("https://github.com/", "").removesuffix(".git")
+    return {
+        "merge_sha": merge_sha,
+        "branch": room.repo_branch,
+        "main_url": f"https://github.com/{repo_path}",
+    }
+
+
 class RoomPatch(BaseModel):
     github_repo_url: str
 

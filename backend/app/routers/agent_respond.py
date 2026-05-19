@@ -53,6 +53,7 @@ class DemoRequest(BaseModel):
     team_agents: list[dict] | None = None
     rn_context: str | None = None
     is_builder: bool = False
+    repo_context: str | None = None
 
 
 class DemoResponse(BaseModel):
@@ -231,6 +232,7 @@ async def agent_respond(
             team_agents=payload.team_agents,
             rn_context=payload.rn_context,
             is_builder=payload.is_builder,
+            repo_context=payload.repo_context,
         )
 
         agent = AGENTS[agent_id]

@@ -135,6 +135,12 @@ class Room(Base):
     thinking_timeout_secs: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     # Coordinator-generated task plan: {"assignments": [{agent_id, agent_name, subtask}...], "summary": "..."}
     coordinator_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    # Cached GitHub repo file tree for active-input sessions.
+    repo_tree: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    # Working branch name for active-input sessions (e.g. "agentlink/session-abc12345" or "main").
+    repo_branch: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
+    # Branch strategy chosen by Requester at session start: "branch" | "main".
+    repo_branch_strategy: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
 
     # Relaciones
     contract: Mapped["RoomContract"] = relationship("RoomContract", back_populates="room")

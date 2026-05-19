@@ -225,6 +225,7 @@ async def get_agent_response(
     team_agents: list[dict] | None = None,
     rn_context: str | None = None,
     is_builder: bool = False,
+    repo_context: str | None = None,
 ) -> str:
     """Call the Claude API as the specified agent and return its response."""
     agent = AGENTS.get(agent_id)
@@ -279,6 +280,8 @@ async def get_agent_response(
             )
     if subtask:
         system = f"{system}\n\nYour assigned subtask for this session: {subtask}"
+    if repo_context:
+        system = f"{system}\n\n{repo_context}"
 
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",

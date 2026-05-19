@@ -440,6 +440,25 @@ export default function SessionRoomClient() {
   const [pollDeadline, setPollDeadline] = useState(120);
   const [pollSubmitting, setPollSubmitting] = useState(false);
 
+  // GitHub repo active input
+  const [showRepoBranchModal, setShowRepoBranchModal] = useState(false);
+  const [repoInitializing, setRepoInitializing] = useState(false);
+  const [repoInitialized, setRepoInitialized] = useState(false);
+  const [repoBranch, setRepoBranch] = useState("");
+  const [repoBranchUrl, setRepoBranchUrl] = useState("");
+  const [repoBranchStrategy, setRepoBranchStrategy] = useState<"branch" | "main">("branch");
+  const [repoTree, setRepoTree] = useState<Array<{path: string; type: string; size?: number}>>([]);
+  const [repoPanelOpen, setRepoPanelOpen] = useState(false);
+  const [repoFileContent, setRepoFileContent] = useState<{path: string; content: string} | null>(null);
+  const [repoFileLoading, setRepoFileLoading] = useState(false);
+  const [repoCommitMsg, setRepoCommitMsg] = useState<Message | null>(null);
+  const [repoCommitPath, setRepoCommitPath] = useState("");
+  const [repoCommitDesc, setRepoCommitDesc] = useState("");
+  const [repoCommitting, setRepoCommitting] = useState(false);
+  const [repoMerging, setRepoMerging] = useState(false);
+  const [repoMerged, setRepoMerged] = useState(false);
+  const [showMergeConfirm, setShowMergeConfirm] = useState(false);
+
   // Coordinator plan pre-session step
   const [showCoordinatorPlan, setShowCoordinatorPlan] = useState(false);
   const [coordinatorPlan, setCoordinatorPlan] = useState<{
@@ -879,6 +898,12 @@ export default function SessionRoomClient() {
     }
   }, [messages]);
 
+  // ── Show branch strategy modal when repo is set and not yet initialized ──
+  useEffect(() => {
+    if (!sessionGithubRepo || repoInitialized || !isAuthenticated || authLoading) return;
+    setShowRepoBranchModal(true);
+  }, [sessionGithubRepo, repoInitialized, isAuthenticated, authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Resume pending GitHub push after OAuth redirect ─────────────────────
 
   useEffect(() => {
@@ -1011,7 +1036,15 @@ export default function SessionRoomClient() {
           setParticipantCount(participants.length);
         }
 
-        if (room.github_repo_url) setSessionGithubRepo(room.github_repo_url);
+        if (room.github_repo_url) {
+          setSessionGithubRepo(room.github_repo_url);
+          // Restore already-initialized repo state if branch is stored in room
+          if (room.repo_branch) {
+            setRepoBranch(room.repo_branch);
+            setRepoBranchStrategy((room.repo_branch_strategy as "branch" | "main") ?? "branch");
+            setRepoInitialized(true);
+          }
+        }
 
         const contract = room.contract ?? room.room_contract ?? {};
         const deliverableSpec: string = contract.deliverable_spec ?? room.deliverable_spec ?? "";
@@ -1124,6 +1157,11 @@ export default function SessionRoomClient() {
         ) {
           const updated = data.data as PollType;
           setPolls((prev) => prev.map((p) => p.poll_id === updated.poll_id ? updated : p));
+        } else if (data.type === "repo_commit") {
+          // repo_commit WS events are also sent as chat messages via the "message" event,
+          // so no need to inject a message here — just update branch state if needed.
+          const cd = data.data ?? {};
+          if (cd.branch && !repoBranch) setRepoBranch(cd.branch);
         }
       } catch { /* ignore malformed frames */ }
     };
@@ -1224,6 +1262,82 @@ export default function SessionRoomClient() {
 
   function handleOAuthSuccess() {
     setGithubConnectionFailed(false);
+  }
+
+  // ── Repo active input ─────────────────────────────────────────────────────
+
+  async function initRepo(strategy: "branch" | "main") {
+    if (!token || !sessionGithubRepo) return;
+    setRepoInitializing(true);
+    setRepoBranchStrategy(strategy);
+    try {
+      const res = await fetch(`${API}/rooms/${roomId}/repo/init`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ strategy }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRepoBranch(data.branch ?? "");
+        setRepoBranchUrl(data.branch_url ?? "");
+        setRepoTree(data.tree_items ?? []);
+        setRepoInitialized(true);
+        setRepoPanelOpen(true);
+      }
+    } catch { /* non-blocking */ }
+    setRepoInitializing(false);
+    setShowRepoBranchModal(false);
+  }
+
+  async function openRepoFile(path: string) {
+    if (!token) return;
+    setRepoFileLoading(true);
+    try {
+      const res = await fetch(
+        `${API}/rooms/${roomId}/repo/file?path=${encodeURIComponent(path)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setRepoFileContent({ path: data.path, content: data.content });
+      }
+    } catch { /* non-blocking */ }
+    setRepoFileLoading(false);
+  }
+
+  async function handleCommitMessage() {
+    if (!repoCommitMsg || !repoCommitPath.trim() || !token || !repoInitialized) return;
+    setRepoCommitting(true);
+    try {
+      await fetch(`${API}/rooms/${roomId}/repo/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          file_path: repoCommitPath.trim(),
+          content: repoCommitMsg.content,
+          commit_message: repoCommitDesc.trim() || `Response by ${repoCommitMsg.agentName}`,
+          agent_id: repoCommitMsg.agentId,
+        }),
+      });
+    } catch { /* non-blocking */ }
+    setRepoCommitting(false);
+    setRepoCommitMsg(null);
+    setRepoCommitPath("");
+    setRepoCommitDesc("");
+  }
+
+  async function mergeToMain() {
+    if (!token) return;
+    setRepoMerging(true);
+    try {
+      const res = await fetch(`${API}/rooms/${roomId}/repo/merge`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      if (res.ok) setRepoMerged(true);
+    } catch { /* non-blocking */ }
+    setRepoMerging(false);
+    setShowMergeConfirm(false);
   }
 
   // ── Coordinator plan generation (extracted so Retry button can re-invoke) ──
@@ -1412,6 +1526,12 @@ export default function SessionRoomClient() {
         // Send UUID if the node id is a real agent UUID, otherwise use the demo slug
         const agentIdToSend = isUUID(agent.id) ? agent.id : toDemoSlug(agent.label);
 
+        const repoCtxStr = repoTree.length > 0
+          ? `--- GITHUB REPOSITORY CONTEXT ---\nRepository: ${sessionGithubRepo}\nWorking branch: ${repoBranch}\n\nYou have read access to this repository. Below is the file tree.\nReference files by path if relevant.\nFile tree:\n${
+              repoTree.slice(0, 200).map((i) => i.path).join("\n")
+            }${repoTree.length > 200 ? `\n...and ${repoTree.length - 200} more files` : ""}`
+          : undefined;
+
         const res = await fetch(`${API}/agents/respond`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1427,6 +1547,7 @@ export default function SessionRoomClient() {
             ...(maxRnds != null ? { max_rounds: maxRnds } : {}),
             ...(rnCtx ? { rn_context: rnCtx } : {}),
             ...(agent.isBuilder ? { is_builder: true } : {}),
+            ...(repoCtxStr ? { repo_context: repoCtxStr } : {}),
           }),
         });
 
@@ -2245,11 +2366,35 @@ export default function SessionRoomClient() {
   }
 
   function downloadLog() {
+    const repoCommits = messages
+      .filter((m) => (m.contentStructured as Record<string, unknown> | undefined)?.type === "repo_commit")
+      .map((m) => {
+        const cs = m.contentStructured as Record<string, unknown>;
+        return {
+          agent_name: cs.agent_name,
+          agent_role: cs.agent_role,
+          file_path: cs.file_path,
+          commit_message: cs.commit_message,
+          commit_sha: cs.commit_sha,
+          commit_url: cs.commit_url,
+          branch: cs.branch,
+          timestamp: m.ts,
+        };
+      });
+
     const log = {
       sessionId: roomId,
       status,
       exportedAt: new Date().toISOString(),
       team: graphNodes.map((n) => ({ id: n.id, name: n.label, role: n.role, isHuman: !!n.isHuman })),
+      ...(sessionGithubRepo ? {
+        github_repo: {
+          url: sessionGithubRepo,
+          branch: repoBranch,
+          strategy: repoBranchStrategy,
+          commits: repoCommits,
+        },
+      } : {}),
       messages: messages.map((m) => ({
         id: m.id,
         agentId: m.agentId,
@@ -2259,6 +2404,7 @@ export default function SessionRoomClient() {
         content: m.content,
         sigValid: m.sigValid,
         timestamp: m.ts,
+        ...(m.contentStructured ? { contentStructured: m.contentStructured } : {}),
       })),
     };
     const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
@@ -2361,6 +2507,22 @@ export default function SessionRoomClient() {
           </Link>
           <span className="font-mono text-xs text-al-muted">{roomId}</span>
           <div className="flex items-center gap-3">
+            {repoInitialized && (
+              <button
+                onClick={() => setRepoPanelOpen((v) => !v)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-colors"
+                style={{
+                  borderColor: repoPanelOpen ? "rgba(78,205,196,0.5)" : undefined,
+                  color: repoPanelOpen ? "#4ECDC4" : undefined,
+                }}
+                title={repoPanelOpen ? "Hide repo panel" : "Show repo panel"}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zM5 2v12M9 5h3M9 8h3M9 11h3" />
+                </svg>
+                Repo
+              </button>
+            )}
             <button
               onClick={() => setDiagramVisible((v) => !v)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-al-border text-al-muted hover:text-al-text hover:border-al-accent/40 transition-colors text-xs"
@@ -2445,6 +2607,95 @@ export default function SessionRoomClient() {
 
       {/* Body */}
       <div className="flex flex-1 min-h-0">
+
+        {/* ── Repo panel (collapsible right sidebar) ── */}
+        {repoPanelOpen && repoInitialized && (
+          <div className="flex flex-col shrink-0 w-72 border-r border-al-border bg-al-surface overflow-hidden" style={{ order: 3 }}>
+            <div className="flex items-center justify-between px-3 py-2 border-b border-al-border">
+              <div className="flex flex-col min-w-0">
+                <span className="text-[11px] font-bold text-al-accent uppercase tracking-wider">Repo</span>
+                {repoBranch && (
+                  <a
+                    href={repoBranchUrl || undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-[9px] text-al-muted truncate hover:text-al-accent transition-colors"
+                    title={repoBranch}
+                  >
+                    {repoBranch}
+                  </a>
+                )}
+              </div>
+              <button
+                onClick={() => { setRepoPanelOpen(false); setRepoFileContent(null); }}
+                className="text-al-muted hover:text-al-text transition-colors shrink-0"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 14 14" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M2 2l10 10M12 2L2 12" />
+                </svg>
+              </button>
+            </div>
+
+            {repoFileContent ? (
+              <div className="flex flex-col flex-1 min-h-0">
+                <div className="flex items-center gap-2 px-3 py-1.5 border-b border-al-border bg-al-bg">
+                  <button
+                    onClick={() => setRepoFileContent(null)}
+                    className="text-al-muted hover:text-al-accent transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor">
+                      <path strokeLinecap="round" strokeWidth={1.5} d="M8 2L3 6l5 4" />
+                    </svg>
+                  </button>
+                  <span className="font-mono text-[9px] text-al-muted truncate flex-1">{repoFileContent.path}</span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3">
+                  <pre className="text-[10px] text-al-muted font-mono whitespace-pre-wrap break-words leading-relaxed">{repoFileContent.content}</pre>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto">
+                {repoFileLoading && (
+                  <div className="flex items-center justify-center py-8">
+                    <svg className="w-4 h-4 animate-spin text-al-accent" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                  </div>
+                )}
+                {repoTree.length === 0 && !repoFileLoading && (
+                  <div className="px-3 py-4 text-[10px] text-al-muted text-center">No files indexed.</div>
+                )}
+                {repoTree.map((item) => (
+                  <button
+                    key={item.path}
+                    onClick={() => item.type === "blob" ? openRepoFile(item.path) : undefined}
+                    disabled={item.type !== "blob"}
+                    className="w-full flex items-center gap-1.5 px-3 py-1 text-left hover:bg-al-bg transition-colors disabled:cursor-default"
+                  >
+                    <span className="shrink-0 text-[10px]" style={{ color: item.type === "tree" ? "#F59E0B" : "#64748B" }}>
+                      {item.type === "tree" ? "📁" : "📄"}
+                    </span>
+                    <span
+                      className="font-mono text-[9px] truncate"
+                      style={{
+                        paddingLeft: `${(item.path.split("/").length - 1) * 8}px`,
+                        color: item.type === "blob" ? "#94A3B8" : "#CBD5E1",
+                      }}
+                    >
+                      {item.path.split("/").pop()}
+                    </span>
+                    {item.size != null && item.size > 0 && (
+                      <span className="shrink-0 text-[8px] text-al-muted ml-auto">
+                        {item.size > 1024 ? `${(item.size / 1024).toFixed(0)}k` : `${item.size}b`}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Left: team graph (45%) ── */}
         <div
@@ -2631,6 +2882,9 @@ export default function SessionRoomClient() {
                   isTyping={isCurrentlyTyping}
                   useMarkdown={isRevealed}
                   onDownloadDeliverable={msg.type === "DELIVERABLE" && isRevealed ? downloadDeliverable : undefined}
+                  onCommit={repoInitialized && !msg.isHuman && msg.agentId !== "system" && msg.type !== "SYSTEM" && isRevealed
+                    ? (m) => { setRepoCommitMsg(m); setRepoCommitPath(""); setRepoCommitDesc(""); }
+                    : undefined}
                 />
               );
             })}
@@ -3187,6 +3441,117 @@ export default function SessionRoomClient() {
         );
       })()}
 
+      {/* Branch strategy modal */}
+      {showRepoBranchModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-5">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 mb-2">
+                <svg className="w-5 h-5 text-al-accent shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+                </svg>
+                <h2 className="text-base font-bold text-al-text">GitHub Repository Linked</h2>
+              </div>
+              <p className="text-xs text-al-muted font-mono truncate">{sessionGithubRepo}</p>
+              <p className="text-xs text-al-muted pt-1">
+                Agents will have read access to this repository. Choose how commits should be applied:
+              </p>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <button
+                onClick={() => initRepo("branch")}
+                disabled={repoInitializing}
+                className="w-full flex flex-col items-start gap-0.5 px-4 py-3 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 text-left"
+                style={{ background: "rgba(78,205,196,0.10)", border: "1.5px solid rgba(78,205,196,0.45)", color: "#4ECDC4" }}
+              >
+                <span>Work on new branch (safe)</span>
+                <span className="text-[10px] font-normal text-al-muted">Creates <span className="font-mono">agentlink/session-{roomId.slice(0, 8)}</span> from main. You merge when ready.</span>
+              </button>
+              <button
+                onClick={() => initRepo("main")}
+                disabled={repoInitializing}
+                className="w-full flex flex-col items-start gap-0.5 px-4 py-3 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 text-left"
+                style={{ background: "rgba(239,68,68,0.08)", border: "1.5px solid rgba(239,68,68,0.35)", color: "#EF4444" }}
+              >
+                <span>Work directly on main (destructive)</span>
+                <span className="text-[10px] font-normal text-al-muted">Commits go directly to the default branch. Use with caution — cannot be undone.</span>
+              </button>
+            </div>
+            {repoInitializing && (
+              <div className="flex items-center gap-2 justify-center text-xs text-al-muted">
+                <svg className="w-3.5 h-3.5 animate-spin text-al-accent" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Initializing repository access…
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Commit modal */}
+      {repoCommitMsg && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-al-text">Commit response to repo</h2>
+              <button onClick={() => setRepoCommitMsg(null)} className="text-al-muted hover:text-al-text transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 14 14" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth={1.5} d="M2 2l10 10M12 2L2 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-3 py-2 rounded-lg bg-al-bg border border-al-border">
+              <p className="text-[10px] text-al-muted mb-0.5">Agent · Branch</p>
+              <p className="text-xs text-al-text font-semibold">{repoCommitMsg.agentName} · <span className="font-mono font-normal text-al-muted">{repoBranch}</span></p>
+            </div>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[10px] text-al-muted uppercase tracking-wide font-semibold">File path *</label>
+                <input
+                  value={repoCommitPath}
+                  onChange={(e) => setRepoCommitPath(e.target.value)}
+                  placeholder="e.g. docs/analysis.md"
+                  className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs font-mono text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] text-al-muted uppercase tracking-wide font-semibold">Commit message</label>
+                <input
+                  value={repoCommitDesc}
+                  onChange={(e) => setRepoCommitDesc(e.target.value)}
+                  placeholder={`Response by ${repoCommitMsg.agentName}`}
+                  className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2.5">
+              <button
+                onClick={() => setRepoCommitMsg(null)}
+                className="flex-1 py-2 rounded-lg text-xs text-al-muted border border-al-border hover:border-al-accent/40 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCommitMessage}
+                disabled={repoCommitting || !repoCommitPath.trim()}
+                className="flex-1 py-2 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
+                style={{ background: "rgba(78,205,196,0.12)", border: "1px solid rgba(78,205,196,0.45)", color: "#4ECDC4" }}
+              >
+                {repoCommitting && (
+                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                )}
+                {repoCommitting ? "Committing…" : "Commit to repo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showFailureModal && failedAgent && (
         <AgentFailureModal
           agentName={failedAgent.name}
@@ -3235,6 +3600,13 @@ export default function SessionRoomClient() {
           onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" ? saveGithubRepoAndRetry : undefined}
           githubPushError={githubPushError}
           onGithubOAuthSuccess={handleOAuthSuccess}
+          repoBranch={repoBranch}
+          repoBranchStrategy={repoBranchStrategy}
+          repoMerging={repoMerging}
+          repoMerged={repoMerged}
+          showMergeConfirm={showMergeConfirm}
+          onSetShowMergeConfirm={setShowMergeConfirm}
+          onMergeToMain={mergeToMain}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
         />
@@ -3416,6 +3788,7 @@ function MessageBubble({
   isTyping = false,
   useMarkdown = true,
   onDownloadDeliverable,
+  onCommit,
 }: {
   msg: Message;
   roomId: string;
@@ -3425,7 +3798,61 @@ function MessageBubble({
   isTyping?: boolean;
   useMarkdown?: boolean;
   onDownloadDeliverable?: (msg: Message) => void;
+  onCommit?: (msg: Message) => void;
 }) {
+  // Special rendering for REPO_COMMIT SYSTEM messages
+  if (msg.type === "SYSTEM" && (msg.contentStructured as Record<string, unknown> | undefined)?.type === "repo_commit") {
+    const cs = msg.contentStructured as Record<string, unknown>;
+    const commitUrl = cs.commit_url as string | undefined;
+    const sha = cs.commit_sha as string | undefined;
+    return (
+      <div
+        className="rounded-xl p-3.5 flex flex-col gap-2"
+        style={{ background: "rgba(78,205,196,0.06)", border: "1px solid rgba(78,205,196,0.25)" }}
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <svg className="w-3.5 h-3.5 text-al-accent shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+          </svg>
+          <span className="text-[11px] font-bold text-al-accent">REPO COMMIT</span>
+          <span className="text-[10px] text-al-muted">·</span>
+          <span className="text-[10px] font-semibold text-al-text">{cs.agent_name as string}</span>
+          <span className="text-[10px] text-al-muted">({cs.agent_role as string})</span>
+          <span className="ml-auto text-[10px] text-al-muted">{new Date(msg.ts).toLocaleTimeString()}</span>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="font-mono text-[10px] text-al-muted bg-al-bg border border-al-border rounded px-1.5 py-0.5">
+            {cs.file_path as string}
+          </span>
+          {sha && commitUrl ? (
+            <a
+              href={commitUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-[9px] text-al-accent hover:underline"
+            >
+              {sha.slice(0, 7)}
+            </a>
+          ) : sha ? (
+            <span className="font-mono text-[9px] text-al-muted">{sha.slice(0, 7)}</span>
+          ) : null}
+        </div>
+        {!!cs.commit_message && (
+          <p className="text-[10px] text-al-muted italic">&ldquo;{cs.commit_message as string}&rdquo;</p>
+        )}
+        <div className="flex items-center gap-1 text-[10px]" style={{ color: msg.sigValid ? "#22C55E" : "#EF4444" }}>
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor">
+            {msg.sigValid
+              ? <path strokeLinecap="round" strokeWidth={1.5} d="M1.5 6l3 3 5.5-5.5" />
+              : <path strokeLinecap="round" strokeWidth={1.5} d="M2 2l8 8M10 2l-8 8" />
+            }
+          </svg>
+          {msg.sigValid ? "sig valid" : "sig invalid"}
+        </div>
+      </div>
+    );
+  }
+
   // Special rendering for coordinator plan SYSTEM messages
   if (msg.type === "SYSTEM" && (msg.contentStructured as Record<string, unknown> | undefined)?.type === "coordinator_plan") {
     const plan = (msg.contentStructured as Record<string, unknown>)?.coordinator_plan as {
@@ -3571,6 +3998,18 @@ function MessageBubble({
             <span>
               Download deliverable · <span className="opacity-70">AgentLink_Deliverable_{roomId}.{deliverableExt}</span>
             </span>
+          </button>
+        )}
+        {onCommit && (
+          <button
+            onClick={() => onCommit(msg)}
+            className="mt-1 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors"
+            style={{ background: "rgba(78,205,196,0.07)", border: "1px solid rgba(78,205,196,0.25)", color: "#4ECDC4" }}
+          >
+            <svg className="w-3 h-3 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+            Commit to repo
           </button>
         )}
         <div className="text-[10px] text-al-muted mt-1">
@@ -3933,6 +4372,13 @@ function CloseModal({
   onPushGitHub,
   onSaveAndRetryGitHub,
   onGithubOAuthSuccess,
+  repoBranch,
+  repoBranchStrategy,
+  repoMerging,
+  repoMerged,
+  showMergeConfirm,
+  onSetShowMergeConfirm,
+  onMergeToMain,
   onDownload,
   onClose,
 }: {
@@ -3958,6 +4404,13 @@ function CloseModal({
   onPushGitHub?: () => void;
   onSaveAndRetryGitHub?: (url: string) => Promise<void>;
   onGithubOAuthSuccess?: () => void;
+  repoBranch?: string;
+  repoBranchStrategy?: "branch" | "main";
+  repoMerging?: boolean;
+  repoMerged?: boolean;
+  showMergeConfirm?: boolean;
+  onSetShowMergeConfirm?: (v: boolean) => void;
+  onMergeToMain?: () => void;
   onDownload: () => void;
   onClose: () => void;
 }) {
@@ -4303,6 +4756,52 @@ function CloseModal({
           {githubPushError && (
             <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30">
               <p className="text-xs text-red-400">{githubPushError}</p>
+            </div>
+          )}
+          {/* Merge branch to main — only shown for SUCCESS + branch strategy */}
+          {outcome === "SUCCESS" && repoBranchStrategy === "branch" && repoBranch && !repoMerged && (
+            <div className="flex flex-col gap-2">
+              {showMergeConfirm ? (
+                <div className="rounded-xl border border-red-500/35 bg-red-500/08 p-3 space-y-2">
+                  <p className="text-xs text-red-400 font-semibold">Merge confirmation</p>
+                  <p className="text-[10px] text-al-muted">
+                    This will merge <span className="font-mono text-al-text">{repoBranch}</span> into main.
+                    <strong className="text-red-400"> This cannot be undone.</strong>
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onSetShowMergeConfirm?.(false)}
+                      className="flex-1 py-1.5 rounded-lg text-xs text-al-muted border border-al-border hover:border-al-accent/40 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={onMergeToMain}
+                      disabled={repoMerging}
+                      className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
+                      style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.45)", color: "#EF4444" }}
+                    >
+                      {repoMerging ? "Merging…" : "Confirm merge"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => onSetShowMergeConfirm?.(true)}
+                  className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+                  style={{ background: "rgba(78,205,196,0.08)", border: "1px solid rgba(78,205,196,0.35)", color: "#4ECDC4" }}
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+                  </svg>
+                  Merge branch to main
+                </button>
+              )}
+            </div>
+          )}
+          {repoMerged && (
+            <div className="px-3 py-2 rounded-lg bg-green-500/10 border border-green-500/30">
+              <p className="text-xs text-green-400">Branch merged to main successfully.</p>
             </div>
           )}
           <div className="flex gap-3">
