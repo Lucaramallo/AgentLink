@@ -451,10 +451,6 @@ export default function SessionRoomClient() {
   const [repoPanelOpen, setRepoPanelOpen] = useState(false);
   const [repoFileContent, setRepoFileContent] = useState<{path: string; content: string} | null>(null);
   const [repoFileLoading, setRepoFileLoading] = useState(false);
-  const [repoCommitMsg, setRepoCommitMsg] = useState<Message | null>(null);
-  const [repoCommitPath, setRepoCommitPath] = useState("");
-  const [repoCommitDesc, setRepoCommitDesc] = useState("");
-  const [repoCommitting, setRepoCommitting] = useState(false);
   const [repoMerging, setRepoMerging] = useState(false);
   const [repoMerged, setRepoMerged] = useState(false);
   const [showMergeConfirm, setShowMergeConfirm] = useState(false);
@@ -511,9 +507,11 @@ export default function SessionRoomClient() {
   // Stable refs so async callbacks always see latest graph state
   const graphEdgesRef = useRef<GraphEdge[]>([]);
   const messagesRef = useRef<Message[]>([]);
+  const repoTreeRef = useRef<Array<{path: string; type: string; size?: number}>>([]);
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
   useEffect(() => { graphEdgesRef.current = graphEdges; }, [graphEdges]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { repoTreeRef.current = repoTree; }, [repoTree]);
 
   // ── Typewriter: enqueue new agent messages & drain queue ──────────────────
   useEffect(() => {
@@ -898,11 +896,11 @@ export default function SessionRoomClient() {
     }
   }, [messages]);
 
-  // ── Show branch strategy modal when repo is set and not yet initialized ──
+  // ── Auto-initialize repo when sessionGithubRepo is set and not yet done ──
   useEffect(() => {
-    if (!sessionGithubRepo || repoInitialized || !isAuthenticated || authLoading) return;
-    setShowRepoBranchModal(true);
-  }, [sessionGithubRepo, repoInitialized, isAuthenticated, authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!sessionGithubRepo || repoInitialized || !isAuthenticated || authLoading || !token) return;
+    void initRepo(repoBranchStrategy || "branch");
+  }, [sessionGithubRepo, repoInitialized, isAuthenticated, authLoading, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Resume pending GitHub push after OAuth redirect ─────────────────────
 
@@ -1043,6 +1041,16 @@ export default function SessionRoomClient() {
             setRepoBranch(room.repo_branch);
             setRepoBranchStrategy((room.repo_branch_strategy as "branch" | "main") ?? "branch");
             setRepoInitialized(true);
+            // Fetch cached file tree (not stored in client state across refreshes)
+            fetch(`${API}/rooms/${roomId}/repo/tree`)
+              .then((r) => r.ok ? r.json() : null)
+              .then((data) => {
+                if (data?.items?.length) {
+                  setRepoTree(data.items);
+                  repoTreeRef.current = data.items;
+                }
+              })
+              .catch(() => {});
           }
         }
 
@@ -1305,25 +1313,25 @@ export default function SessionRoomClient() {
     setRepoFileLoading(false);
   }
 
-  async function handleCommitMessage() {
-    if (!repoCommitMsg || !repoCommitPath.trim() || !token || !repoInitialized) return;
-    setRepoCommitting(true);
+  async function autoCommitToRepo(msg: Message, roundNum: number) {
+    if (!repoInitialized || !token || !sessionGithubRepo) return;
+    const agentSlug = msg.agentName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const filePath = msg.type === "DELIVERABLE"
+      ? `sessions/${roomId}/deliverable.md`
+      : `sessions/${roomId}/contributions/${agentSlug}.md`;
+    const commitMessage = `[${msg.agentName}] (${msg.role}): Round ${roundNum} output`;
     try {
       await fetch(`${API}/rooms/${roomId}/repo/commit`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          file_path: repoCommitPath.trim(),
-          content: repoCommitMsg.content,
-          commit_message: repoCommitDesc.trim() || `Response by ${repoCommitMsg.agentName}`,
-          agent_id: repoCommitMsg.agentId,
+          file_path: filePath,
+          content: msg.content,
+          commit_message: commitMessage,
+          agent_id: msg.agentId,
         }),
       });
     } catch { /* non-blocking */ }
-    setRepoCommitting(false);
-    setRepoCommitMsg(null);
-    setRepoCommitPath("");
-    setRepoCommitDesc("");
   }
 
   async function mergeToMain() {
@@ -1531,10 +1539,28 @@ export default function SessionRoomClient() {
         // Send UUID if the node id is a real agent UUID, otherwise use the demo slug
         const agentIdToSend = isUUID(agent.id) ? agent.id : toDemoSlug(agent.label);
 
-        const repoCtxStr = repoTree.length > 0
+        // Fetch tree if we have a repo but tree is empty (e.g. after page refresh)
+        if (sessionGithubRepo && repoTreeRef.current.length === 0 && token) {
+          try {
+            const treeRes = await fetch(`${API}/rooms/${roomId}/repo/tree`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (treeRes.ok) {
+              const treeData = await treeRes.json();
+              const items = (treeData.items ?? []) as Array<{path: string; type: string; size?: number}>;
+              if (items.length > 0) {
+                setRepoTree(items);
+                repoTreeRef.current = items;
+              }
+            }
+          } catch { /* non-blocking */ }
+        }
+
+        const currentTree = repoTreeRef.current;
+        const repoCtxStr = currentTree.length > 0
           ? `--- GITHUB REPOSITORY CONTEXT ---\nRepository: ${sessionGithubRepo}\nWorking branch: ${repoBranch}\n\nYou have read access to this repository. Below is the file tree.\nReference files by path if relevant.\nFile tree:\n${
-              repoTree.slice(0, 200).map((i) => i.path).join("\n")
-            }${repoTree.length > 200 ? `\n...and ${repoTree.length - 200} more files` : ""}`
+              currentTree.slice(0, 200).map((i) => i.path).join("\n")
+            }${currentTree.length > 200 ? `\n...and ${currentTree.length - 200} more files` : ""}`
           : undefined;
 
         const res = await fetch(`${API}/agents/respond`, {
@@ -1939,7 +1965,10 @@ export default function SessionRoomClient() {
         rnContext,
       );
       markDone(builderAgent, builderMsg, maxRounds);
-      if (builderMsg) finalRoundMsgs.push(builderMsg);
+      if (builderMsg) {
+        finalRoundMsgs.push(builderMsg);
+        void autoCommitToRepo(builderMsg, maxRounds);
+      }
     } else {
       // No Builder: all agents run, last contributor gets DELIVERABLE
       for (let i = 0; i < allFinalAgents.length; i++) {
@@ -1958,7 +1987,10 @@ export default function SessionRoomClient() {
           maxRounds,
         );
         markDone(agent, msg, maxRounds);
-        if (msg) finalRoundMsgs.push(msg);
+        if (msg) {
+          finalRoundMsgs.push(msg);
+          if (isDeliverable) void autoCommitToRepo(msg, maxRounds);
+        }
       }
     }
 
@@ -2887,9 +2919,6 @@ export default function SessionRoomClient() {
                   isTyping={isCurrentlyTyping}
                   useMarkdown={isRevealed}
                   onDownloadDeliverable={msg.type === "DELIVERABLE" && isRevealed ? downloadDeliverable : undefined}
-                  onCommit={repoInitialized && !msg.isHuman && msg.agentId !== "system" && msg.type !== "SYSTEM" && isRevealed
-                    ? (m) => { setRepoCommitMsg(m); setRepoCommitPath(""); setRepoCommitDesc(""); }
-                    : undefined}
                 />
               );
             })}
@@ -3495,67 +3524,6 @@ export default function SessionRoomClient() {
         </div>
       )}
 
-      {/* Commit modal */}
-      {repoCommitMsg && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-2xl border border-al-border bg-al-surface shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-al-text">Commit response to repo</h2>
-              <button onClick={() => setRepoCommitMsg(null)} className="text-al-muted hover:text-al-text transition-colors">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 14 14" stroke="currentColor">
-                  <path strokeLinecap="round" strokeWidth={1.5} d="M2 2l10 10M12 2L2 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="px-3 py-2 rounded-lg bg-al-bg border border-al-border">
-              <p className="text-[10px] text-al-muted mb-0.5">Agent · Branch</p>
-              <p className="text-xs text-al-text font-semibold">{repoCommitMsg.agentName} · <span className="font-mono font-normal text-al-muted">{repoBranch}</span></p>
-            </div>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-[10px] text-al-muted uppercase tracking-wide font-semibold">File path *</label>
-                <input
-                  value={repoCommitPath}
-                  onChange={(e) => setRepoCommitPath(e.target.value)}
-                  placeholder="e.g. docs/analysis.md"
-                  className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs font-mono text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] text-al-muted uppercase tracking-wide font-semibold">Commit message</label>
-                <input
-                  value={repoCommitDesc}
-                  onChange={(e) => setRepoCommitDesc(e.target.value)}
-                  placeholder={`Response by ${repoCommitMsg.agentName}`}
-                  className="w-full bg-al-bg border border-al-border rounded-lg px-3 py-1.5 text-xs text-al-text placeholder:text-al-muted focus:outline-none focus:border-al-accent transition-colors"
-                />
-              </div>
-            </div>
-            <div className="flex gap-2.5">
-              <button
-                onClick={() => setRepoCommitMsg(null)}
-                className="flex-1 py-2 rounded-lg text-xs text-al-muted border border-al-border hover:border-al-accent/40 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCommitMessage}
-                disabled={repoCommitting || !repoCommitPath.trim()}
-                className="flex-1 py-2 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
-                style={{ background: "rgba(78,205,196,0.12)", border: "1px solid rgba(78,205,196,0.45)", color: "#4ECDC4" }}
-              >
-                {repoCommitting && (
-                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>
-                )}
-                {repoCommitting ? "Committing…" : "Commit to repo"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showFailureModal && failedAgent && (
         <AgentFailureModal
@@ -3793,7 +3761,6 @@ function MessageBubble({
   isTyping = false,
   useMarkdown = true,
   onDownloadDeliverable,
-  onCommit,
 }: {
   msg: Message;
   roomId: string;
@@ -3803,7 +3770,6 @@ function MessageBubble({
   isTyping?: boolean;
   useMarkdown?: boolean;
   onDownloadDeliverable?: (msg: Message) => void;
-  onCommit?: (msg: Message) => void;
 }) {
   // Special rendering for REPO_COMMIT SYSTEM messages
   if (msg.type === "SYSTEM" && (msg.contentStructured as Record<string, unknown> | undefined)?.type === "repo_commit") {
@@ -4003,18 +3969,6 @@ function MessageBubble({
             <span>
               Download deliverable · <span className="opacity-70">AgentLink_Deliverable_{roomId}.{deliverableExt}</span>
             </span>
-          </button>
-        )}
-        {onCommit && (
-          <button
-            onClick={() => onCommit(msg)}
-            className="mt-1 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors"
-            style={{ background: "rgba(78,205,196,0.07)", border: "1px solid rgba(78,205,196,0.25)", color: "#4ECDC4" }}
-          >
-            <svg className="w-3 h-3 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
-            </svg>
-            Commit to repo
           </button>
         )}
         <div className="text-[10px] text-al-muted mt-1">
