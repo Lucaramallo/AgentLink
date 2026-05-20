@@ -1,8 +1,11 @@
 """Router de Salas — creación, mensajes y cierre de salas de colaboración — Módulos 2 y 3."""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated
+
+log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
@@ -744,8 +747,10 @@ async def generate_coordinator_plan_endpoint(
     try:
         new_plan = await generate_coordinator_plan(db, room_id, agent_ids=payload.agent_ids)
     except ValueError as exc:
+        log.error("coordinator/generate bad request room=%s: %s", room_id, exc)
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        log.error("coordinator/generate failed room=%s: %s", room_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Coordinator plan generation failed: {exc}")
 
     # Merge into existing plan without overwriting existing assignments.

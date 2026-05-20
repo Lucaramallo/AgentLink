@@ -1352,8 +1352,8 @@ export default function SessionBuildClient() {
         }),
       );
 
-      // Register session graph with backend for coordinator plan generation and turn order.
-      fetch(`${API_BASE}/rooms/${room_id}/session-graph`, {
+      // Register session graph with backend before navigating — coordinator/generate depends on it.
+      const sgRes = await fetch(`${API_BASE}/rooms/${room_id}/session-graph`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1368,7 +1368,8 @@ export default function SessionBuildClient() {
           edges: conns.map((c) => ({ from: c.fromId, to: c.toId })),
           thinking_timeout_secs: 60,
         }),
-      }).catch(() => {});
+      });
+      if (!sgRes.ok) throw new Error(`Failed to register session graph (${sgRes.status})`);
 
       router.push(`/session/${room_id}`);
     } catch (err) {

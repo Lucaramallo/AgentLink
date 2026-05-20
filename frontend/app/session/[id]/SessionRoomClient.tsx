@@ -1368,8 +1368,13 @@ export default function SessionRoomClient() {
             setEditedAssignments(plan.assignments ?? []);
             coordinatorPlanRef.current = plan;
             setActiveCoordinatorTab((prev) => prev ?? coord.id);
+          } else {
+            const detail = await res.text().catch(() => res.statusText);
+            console.error(`[coordinator/generate] ${res.status} for coord=${coord.id}:`, detail);
           }
-        } catch { /* non-blocking per coordinator */ }
+        } catch (err) {
+          console.error(`[coordinator/generate] fetch error for coord=${coord.id}:`, err);
+        }
       }
     } catch { /* non-blocking */ }
     setCoordinatorPlanLoading(false);
