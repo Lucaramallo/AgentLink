@@ -4425,14 +4425,25 @@ function CloseModal({
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  // Local flag: set to true the moment OAuth succeeds, before parent prop propagates.
+  const [oauthConnected, setOauthConnected] = useState(false);
+
+  // Keep the callback fresh inside the effect without re-subscribing the listener.
+  const onGithubOAuthSuccessRef = useRef(onGithubOAuthSuccess);
+  useEffect(() => { onGithubOAuthSuccessRef.current = onGithubOAuthSuccess; });
 
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === "github-oauth-success") {
-        if (e.data.token && e.data.user) login(e.data.token, e.data.user as AuthUser);
+        if (e.data.token && e.data.user) {
+          login(e.data.token, e.data.user as AuthUser);
+          // Update local state immediately — don't wait for the prop to trickle down
+          // from the parent re-render so the modal transitions in the same paint.
+          if ((e.data.user as AuthUser).github_username) setOauthConnected(true);
+        }
         setOauthLoading(false);
-        onGithubOAuthSuccess?.();
+        onGithubOAuthSuccessRef.current?.();
       } else if (e.data?.type === "github-oauth-error") {
         setOauthError((e.data.error as string | undefined) ?? "OAuth failed.");
         setOauthLoading(false);
@@ -4445,12 +4456,19 @@ function CloseModal({
   async function handleOAuthRedirect() {
     setOauthLoading(true);
     setOauthError(null);
+    // Open the popup synchronously before any await so browsers allow it.
+    // Then navigate it to the OAuth URL once the fetch resolves.
+    const popup = window.open("", "github-oauth", "width=600,height=700,left=300,top=100");
     try {
       const url = await fetchGithubOAuthUrl();
       if (!url) throw new Error("Could not start GitHub OAuth.");
-      const popup = window.open(url, "github-oauth", "width=600,height=700,left=300,top=100");
-      if (!popup) throw new Error("Popup blocked. Please allow popups for this site and try again.");
+      if (popup) {
+        popup.location.href = url;
+      } else {
+        throw new Error("Popup blocked. Please allow popups for this site and try again.");
+      }
     } catch (err) {
+      if (popup) popup.close();
       setOauthError(err instanceof Error ? err.message : "GitHub OAuth failed.");
       setOauthLoading(false);
     }
@@ -4473,6 +4491,10 @@ function CloseModal({
   const isIncomplete = outcome === "INCOMPLETE";
   const isCancelled  = outcome === "CANCELLED";
   const color        = isSuccess ? "#22C55E" : (isIncomplete || isCancelled) ? "#EF4444" : "#F59E0B";
+
+  // Merge prop + local flag so the modal transitions the moment OAuth succeeds,
+  // without waiting for the parent prop to propagate through a render cycle.
+  const effectiveGithubConnected = githubConnected || oauthConnected;
 
   // Per-agent cost breakdown
   const agentBreakdown = agents.map((a) => {
@@ -4705,7 +4727,7 @@ function CloseModal({
             </button>
           )}
           {/* Step 2: GitHub connected but no repo URL — enter repo to push */}
-          {!githubDeliveryUrl && !onPushGitHub && githubConnected && !githubRepoUrl && outcome === "SUCCESS" && deliverable && (
+          {!githubDeliveryUrl && !onPushGitHub && effectiveGithubConnected && !githubRepoUrl && outcome === "SUCCESS" && deliverable && (
             <div className="flex flex-col gap-2">
               <p className="text-center text-xs text-al-muted">
                 Enter a GitHub repo URL to push the deliverable:
@@ -4732,7 +4754,7 @@ function CloseModal({
             </div>
           )}
           {/* Step 1: GitHub not connected — OAuth popup to connect account */}
-          {!githubDeliveryUrl && !onPushGitHub && !githubConnected && outcome === "SUCCESS" && deliverable && (
+          {!githubDeliveryUrl && !onPushGitHub && !effectiveGithubConnected && outcome === "SUCCESS" && deliverable && (
             <div className="flex flex-col gap-2">
               <p className="text-center text-xs text-al-muted">
                 Connect your GitHub account to push the deliverable to your repo.
