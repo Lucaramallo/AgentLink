@@ -103,6 +103,13 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
+def _strip_node_prefix(agent_id: str) -> str:
+    """Session graph nodes use 'node-{uuid}' as their ID. Strip the prefix to get the raw UUID."""
+    if agent_id.startswith("node-"):
+        return agent_id[5:]
+    return agent_id
+
+
 @router.post("/respond", response_model=DemoResponse)
 async def agent_respond(
     payload: DemoRequest,
@@ -112,15 +119,19 @@ async def agent_respond(
     ip = _client_ip(request)
     r = _redis()
 
+    # Normalise agent_id: strip the 'node-' prefix the session graph adds so the
+    # UUID check below works even when the caller passes the full node_id.
+    raw_agent_id = _strip_node_prefix(payload.agent_id)
+
     try:
         # ── Try DB agent first (external agents with webhook_url) ──────────
-        if _is_uuid(payload.agent_id):
+        if _is_uuid(raw_agent_id):
             from app.models.agent import Agent as AgentModel
             from app.models.room import Room as RoomModel
             from sqlalchemy.orm import selectinload
             from sqlalchemy.future import select as sa_select
 
-            db_agent = await db.get(AgentModel, _uuid_mod.UUID(payload.agent_id))
+            db_agent = await db.get(AgentModel, _uuid_mod.UUID(raw_agent_id))
 
             if db_agent and db_agent.webhook_url:
                 # Use snapshot webhook_url if this call is part of a real room session
@@ -136,7 +147,7 @@ async def agent_respond(
                         snapshots = room.contract.agent_snapshots
                         for key in ("agent_a", "agent_b"):
                             snap = snapshots.get(key, {})
-                            if snap.get("agent_id") == payload.agent_id:
+                            if snap.get("agent_id") == raw_agent_id:
                                 snapshot_webhook_url = snap.get("webhook_url")
                                 break
 
@@ -160,7 +171,7 @@ async def agent_respond(
                     )
                 return DemoResponse(
                     response=result["response"],
-                    agent_id=payload.agent_id,
+                    agent_id=raw_agent_id,
                     agent_name=db_agent.name,
                     messages_remaining=-1,  # external agents have no demo limit
                 )
@@ -181,7 +192,7 @@ async def agent_respond(
                     )
 
         # ── Fall through to built-in demo agents ───────────────────────────
-        agent_id = _normalize_agent_id(payload.agent_id)
+        agent_id = _normalize_agent_id(raw_agent_id)
         if agent_id not in AGENTS:
             return JSONResponse(
                 status_code=400,
@@ -214,12 +225,12 @@ async def agent_respond(
 
         # Look up coordinator subtask from room plan if not explicitly provided
         subtask = payload.subtask
-        if subtask is None and _is_uuid(payload.room_id) and _is_uuid(payload.agent_id):
+        if subtask is None and _is_uuid(payload.room_id) and _is_uuid(raw_agent_id):
             from app.models.room import Room as _RoomModel
             from app.services.coordinator_service import get_agent_subtask as _get_subtask
             _room = await db.get(_RoomModel, _uuid_mod.UUID(payload.room_id))
             if _room and _room.coordinator_plan:
-                subtask = _get_subtask(_room, payload.agent_id)
+                subtask = _get_subtask(_room, raw_agent_id)
 
         text = await get_agent_response(
             agent_id=agent_id,
