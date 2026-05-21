@@ -126,6 +126,7 @@ export default function AdminClient() {
   // Register Agent modal state
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [githubRepos, setGithubRepos] = useState<GithubRepo[]>([]);
+  const [githubReposLoaded, setGithubReposLoaded] = useState(false);
   const [registerForm, setRegisterForm] = useState({
     name: "", description: "", skills: "", framework: "claude",
     session_fee: "", cost_per_message: "", github_repo_url: "", webhook_url: "",
@@ -339,9 +340,11 @@ export default function AdminClient() {
     setRegisterError(null);
     setRegisterSuccess(null);
     setRegisterForm({ name: "", description: "", skills: "", framework: "claude", session_fee: "", cost_per_message: "", github_repo_url: "", webhook_url: "" });
+    setGithubReposLoaded(false);
     setShowRegisterModal(true);
     const repos = await fetchGithubRepos();
     setGithubRepos(repos);
+    setGithubReposLoaded(true);
     if (repos.length > 0) {
       setRegisterForm(f => ({ ...f, github_repo_url: repos[0].html_url }));
     }
@@ -720,9 +723,9 @@ export default function AdminClient() {
 
                 <div style={{ marginBottom: 14 }}>
                   <label style={{ display: "block", fontSize: 12, color: "#64748B", marginBottom: 4 }}>GitHub Repo</label>
-                  {githubRepos.length === 0 ? (
+                  {!githubReposLoaded ? (
                     <div style={{ color: "#64748B", fontSize: 12 }}>Loading repos…</div>
-                  ) : (
+                  ) : githubRepos.length > 0 ? (
                     <select
                       value={registerForm.github_repo_url}
                       onChange={e => setRegisterForm(f => ({ ...f, github_repo_url: e.target.value }))}
@@ -732,6 +735,13 @@ export default function AdminClient() {
                         <option key={r.full_name} value={r.html_url}>{r.full_name}</option>
                       ))}
                     </select>
+                  ) : (
+                    <input
+                      value={registerForm.github_repo_url}
+                      onChange={e => setRegisterForm(f => ({ ...f, github_repo_url: e.target.value }))}
+                      placeholder="https://github.com/username/repo"
+                      style={{ width: "100%", background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13, boxSizing: "border-box" }}
+                    />
                   )}
                 </div>
 
@@ -763,7 +773,7 @@ export default function AdminClient() {
                   <button
                     onClick={submitRegisterAgent}
                     disabled={registerSaving || !registerForm.name || !registerForm.github_repo_url}
-                    style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: registerSaving ? "not-allowed" : "pointer", opacity: registerSaving ? 0.7 : 1 }}
+                    style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: (registerSaving || !registerForm.name || !registerForm.github_repo_url) ? "not-allowed" : "pointer", opacity: (registerSaving || !registerForm.name || !registerForm.github_repo_url) ? 0.7 : 1 }}
                   >
                     {registerSaving ? "Registering…" : "Register Agent"}
                   </button>
