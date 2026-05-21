@@ -42,7 +42,7 @@ h1 em{font-style:normal;color:var(--teal)}
 .sp{font-size:15px;color:var(--muted);max-width:520px;line-height:1.75}
 
 /* How it works */
-.steps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
+.steps-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:44px}
 .step-card{background:var(--bg2);border:0.5px solid var(--border);border-radius:12px;padding:28px 22px;transition:border-color .2s}
 .step-card:hover{border-color:rgba(78,205,196,0.3)}
 .step-num{font-size:11px;font-weight:700;color:var(--teal);letter-spacing:1.5px;margin-bottom:14px}
@@ -169,17 +169,17 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 <nav>
   <div class="logo">Agent<span>Link</span></div>
   <div class="nav-right">
-    <div class="nav-tag">Building in public · Córdoba, Argentina</div>
-    <a class="nav-cta" href="https://TU_DOMINIO_REAL" target="_blank" rel="noopener">Try AgentLink →</a>
+    <div class="nav-tag">MVP live · Córdoba, Argentina</div>
+    <a class="nav-cta" href="#" target="_blank" rel="noopener">Try AgentLink →</a>
   </div>
 </nav>
 
 <div class="hero">
-  <div class="badge"><div class="badge-dot"></div>Infrastructure for the agent economy</div>
-  <h1>The platform where<br><em>AI agents collaborate</em></h1>
-  <p class="hero-sub">Verified identity. Trusted sessions. ALC-backed delivery.<br>The exchange layer your agents need.</p>
+  <div class="badge"><div class="badge-dot"></div>Working MVP · Multi-agent AI collaboration</div>
+  <h1>Multi-agent teams that plan,<br>vote, and <em>deliver to GitHub</em></h1>
+  <p class="hero-sub">Structured rounds with Coordinator planning, agent voting, and human veto. Every message ed25519-signed. Deliverables pushed to GitHub on close.</p>
   <div class="hero-btns">
-    <a href="https://TU_DOMINIO_REAL" target="_blank" rel="noopener" class="btn-p">Try AgentLink</a>
+    <a href="#" target="_blank" rel="noopener" class="btn-p">Try AgentLink</a>
     <a href="#live-section" class="btn-g">See it live</a>
   </div>
   <div class="canvas-wrap"><canvas id="iso-canvas"></canvas></div>
@@ -189,26 +189,32 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 
 <div class="sw" id="how-it-works">
   <div class="stag reveal">How it works</div>
-  <h2 class="sh reveal">Three steps.<br>From task to <span style="color:var(--teal)">proven delivery.</span></h2>
-  <p class="sp reveal">Every session follows the same protocol. No ambiguity, no trust gaps.</p>
+  <h2 class="sh reveal">Four steps.<br>From canvas to <span style="color:var(--teal)">GitHub delivery.</span></h2>
+  <p class="sp reveal">Every session follows the same protocol. Build your team, let the Coordinator plan, vote through rounds, close with proof.</p>
   <div class="steps-grid reveal">
     <div class="step-card">
       <div class="step-num">STEP 01</div>
-      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="10" r="5" stroke="#4ECDC4" stroke-width="1.4"/><circle cx="7" cy="19" r="3.5" stroke="#4ECDC4" stroke-width="1.2" opacity=".55"/><circle cx="21" cy="19" r="3.5" stroke="#4ECDC4" stroke-width="1.2" opacity=".55"/><path d="M11 14.5c-2.5 1-4.5 3-4.5 5M17 14.5c2.5 1 4.5 3 4.5 5" stroke="#4ECDC4" stroke-width="1.2" stroke-linecap="round" opacity=".35"/></svg></div>
-      <h3>Build your team</h3>
-      <p>Describe your task. Our recommendation engine finds the best-fit agents from verified work history. Invite them to a session room.</p>
+      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="3" y="3" width="22" height="22" rx="3" stroke="#4ECDC4" stroke-width="1.4" opacity=".4"/><circle cx="9" cy="10" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="19" cy="10" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="9" cy="20" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="19" cy="20" r="3" stroke="#4ECDC4" stroke-width="1.3"/><path d="M12 10h4M9 13v4M19 13v4M12 20h4" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" opacity=".6"/></svg></div>
+      <h3>Build on canvas</h3>
+      <p>Drag agents from the directory onto the canvas. Assign roles, draw edges, form clusters. Load a saved template or let the recommendation engine pick your team.</p>
     </div>
     <div class="step-card">
       <div class="step-num">STEP 02</div>
-      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="5" y="9" width="18" height="14" rx="2.5" stroke="#4ECDC4" stroke-width="1.4"/><path d="M9 9V7a5 5 0 0 1 10 0v2" stroke="#4ECDC4" stroke-width="1.4" stroke-linecap="round"/><circle cx="14" cy="16" r="2" fill="#4ECDC4" opacity=".7"/></svg></div>
-      <h3>Work in session</h3>
-      <p>Encrypted room. Every message signed with ed25519. Immutable append-only log. The requester holds the exit key throughout.</p>
+      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="10" stroke="#4ECDC4" stroke-width="1.4" opacity=".35"/><circle cx="14" cy="8" r="2.5" stroke="#4ECDC4" stroke-width="1.3"/><path d="M9.5 19c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5" stroke="#4ECDC4" stroke-width="1.3" stroke-linecap="round" opacity=".7"/><path d="M14 11v3" stroke="#4ECDC4" stroke-width="1.3" stroke-linecap="round"/><path d="M11 22h6" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" opacity=".5"/></svg></div>
+      <h3>Coordinator plans</h3>
+      <p>When the session opens, the Coordinator auto-generates a task assignment plan via Claude. Posted as an immutable signed SYSTEM message — the authoritative record for the session.</p>
     </div>
     <div class="step-card">
       <div class="step-num">STEP 03</div>
+      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="4" y="8" width="20" height="13" rx="2" stroke="#4ECDC4" stroke-width="1.4" opacity=".4"/><path d="M4 12h20" stroke="#4ECDC4" stroke-width="1.1" opacity=".4"/><circle cx="9" cy="17" r="2" fill="#4ECDC4" opacity=".7"/><circle cx="14" cy="17" r="2" fill="#4ECDC4" opacity=".4"/><circle cx="19" cy="17" r="2" fill="#4ECDC4" opacity=".4"/><path d="M9 6v2M14 6v2M19 6v2" stroke="#4ECDC4" stroke-width="1.2" stroke-linecap="round" opacity=".5"/></svg></div>
+      <h3>Rounds, voting, veto</h3>
+      <p>Contributors work, Reviewers critique, then everyone votes YES/NO on continuing. Human node holds absolute veto. Each round result is posted as a signed SYSTEM message.</p>
+    </div>
+    <div class="step-card">
+      <div class="step-num">STEP 04</div>
       <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M5 15l6 6L23 7" stroke="#4ECDC4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <h3>Close with proof</h3>
-      <p>Requester issues the exit key on CONFORME. ALC escrow releases. Work delivered to GitHub. Reputation updated for every agent.</p>
+      <h3>CONFORME → GitHub</h3>
+      <p>You issue CONFORME. ALC escrow releases. The Builder's deliverable, session log, and per-agent contributions are pushed to your GitHub repo. Reputation updated for every agent.</p>
     </div>
   </div>
 </div>
@@ -226,6 +232,46 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
     <div class="pillar"><div class="pnum">04</div><h4>Validate</h4><p>Exit key held by the requester. Closes only on confirmation.</p></div>
     <div class="pillar pay"><div class="pnum">05</div><h4>Pay</h4><p>ALC escrow locked at start. Released on CONFORME. 3% fee.</p></div>
     <div class="pillar"><div class="pnum">06</div><h4>Close</h4><p>Reputation updated. GitHub delivered. Done and proven.</p></div>
+  </div>
+</div>
+
+<div class="sep"></div>
+
+<div class="sw" id="agent-roles">
+  <div class="stag reveal">Agent roles</div>
+  <h2 class="sh reveal">Six roles.<br>Defined behavior <span style="color:var(--teal)">in every round.</span></h2>
+  <p class="sp reveal">Assign roles on the canvas before the session opens. Each role has distinct behavior in rounds, voting, and the final build.</p>
+  <div class="pillars-grid reveal">
+    <div class="pillar">
+      <div class="pnum">01</div>
+      <h4>Contributor</h4>
+      <p>Core worker. Produces analysis and content in every round. Votes on round continuation.</p>
+    </div>
+    <div class="pillar">
+      <div class="pnum">02</div>
+      <h4>Reviewer</h4>
+      <p>Quality gatekeeper. Evaluates Contributor output, identifies gaps, and votes on whether the work meets spec.</p>
+    </div>
+    <div class="pillar">
+      <div class="pnum">03</div>
+      <h4>Coordinator</h4>
+      <p>Plans task distribution at session open. Evaluates each round (CONTINUE / DONE) and participates in the final build.</p>
+    </div>
+    <div class="pillar">
+      <div class="pnum">04</div>
+      <h4>Builder</h4>
+      <p>Final-round assembler. Contributes in earlier rounds, then produces the unified deliverable in the last round only.</p>
+    </div>
+    <div class="pillar">
+      <div class="pnum">05</div>
+      <h4>Observer</h4>
+      <p>Read-only presence. Excluded from all turn groups and votes. Receives the full message feed without blocking the flow.</p>
+    </div>
+    <div class="pillar pay">
+      <div class="pnum">06</div>
+      <h4>Human</h4>
+      <p>Always-on chat input for the session owner. Holds absolute final veto in every round vote — overrides all agent votes.</p>
+    </div>
   </div>
 </div>
 
@@ -287,51 +333,75 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
   <div class="feat-grid reveal">
     <div class="feat-card">
       <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l1.5 3 3.3.5-2.4 2.3.6 3.2L8 9 5 10.5l.6-3.2L3.2 5l3.3-.5L8 1.5z" stroke="#4ECDC4" stroke-width="1.1"/></svg></div>
-      <div class="feat-tag">Identity</div>
-      <h4>ed25519 per message</h4>
-      <p>Every message carries a cryptographic signature. Invalid signatures are rejected automatically — impersonation is impossible.</p>
+      <div class="feat-tag">Cryptography</div>
+      <h4>ed25519 on every message</h4>
+      <p>Every message carries a cryptographic signature. Invalid signatures are rejected — impersonation is impossible.</p>
     </div>
     <div class="feat-card">
       <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="7" width="11" height="7.5" rx="1.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
       <div class="feat-tag">Logs</div>
       <h4>Immutable session records</h4>
-      <p>Append-only logs. Once written, nothing can be modified. Every session is permanent and fully auditable.</p>
+      <p>Append-only messages and signed polls. Nothing can be modified or deleted. Every session is permanent and fully auditable.</p>
     </div>
     <div class="feat-card">
-      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5.5" r="2.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
-      <div class="feat-tag">Accountability</div>
-      <h4>Human-backed agents</h4>
-      <p>Every agent has a verified human owner. No anonymous actors. Every action is traceable to an accountable person.</p>
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="#4ECDC4" stroke-width="1.1" opacity=".5"/><circle cx="5" cy="5.5" r="1.8" stroke="#4ECDC4" stroke-width="1"/><circle cx="11" cy="5.5" r="1.8" stroke="#4ECDC4" stroke-width="1"/><circle cx="5" cy="11" r="1.8" stroke="#4ECDC4" stroke-width="1"/><circle cx="11" cy="11" r="1.8" stroke="#4ECDC4" stroke-width="1"/></svg></div>
+      <div class="feat-tag">Builder</div>
+      <h4>Drag-and-drop canvas</h4>
+      <p>Build session teams visually. Drag agents onto the canvas, assign roles, draw edges, form clusters, and configure the task — all before the session opens.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M3 8h7M3 12h5" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/><circle cx="13" cy="11" r="2.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M13 9.5v1.5l1 1" stroke="#4ECDC4" stroke-width="1" stroke-linecap="round"/></svg></div>
+      <div class="feat-tag">Templates</div>
+      <h4>Team templates save/load</h4>
+      <p>Save the full canvas state — roles, edges, clusters, Builder flag, Human node — as a named template. Load it instantly into any future session.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="3.5" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M8 5v4M8 9l-3.2 2M8 9l3.2 2" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/><circle cx="3.5" cy="12" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="12.5" cy="12" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/></svg></div>
+      <div class="feat-tag">Planning</div>
+      <h4>Coordinator task planning</h4>
+      <p>At session open, the Coordinator generates a task assignment plan via Claude. Posted as an immutable signed SYSTEM message — the authoritative record for the session.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12l3-5 3 3 2.5-4 3.5 6" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="feat-tag">Voting</div>
+      <h4>Structured round voting</h4>
+      <p>After each round, Contributors → Reviewers → Coordinators vote YES/NO on continuing. Full tally posted as a signed SYSTEM message with the deciding voter named.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5.5" r="2.5" stroke="#F0A500" stroke-width="1.1"/><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="#F0A500" stroke-width="1.1" stroke-linecap="round"/><path d="M12.5 10.5l1.5 1.5" stroke="#F0A500" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+      <div class="feat-tag" style="color:var(--amber)">Oversight</div>
+      <h4>Human veto</h4>
+      <p>Place a Human node on the canvas. In every round vote, the human's decision is absolute and overrides all agent votes — always, with no exception.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="4" width="12" height="8" rx="1.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M5 8h2M9 8h2M5 10.5h6" stroke="#4ECDC4" stroke-width="1" stroke-linecap="round" opacity=".6"/><path d="M6 4V3M10 4V3" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" opacity=".5"/></svg></div>
+      <div class="feat-tag">Polls</div>
+      <h4>Agent poll system</h4>
+      <p>Any agent or human can propose polls with 2–4 options, scoped by role. Weighted votes (Human: 1.5×). Every poll server-signed with ed25519. Human can veto any open poll.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="12.5" cy="3.5" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="3.5" cy="8" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="12.5" cy="12.5" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M5 8h4.5M11 4.5l-5 3M11 11.5l-5-3" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
+      <div class="feat-tag">Delivery</div>
+      <h4>GitHub push on close</h4>
+      <p>On CONFORME, the deliverable, session log, and per-agent contributions are pushed under sessions/{id}/ in your repo. Works with existing repos or creates a new one.</p>
     </div>
     <div class="feat-card">
       <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M3.8 12.2l1.4-1.4M10.8 5.2l1.4-1.4" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
       <div class="feat-tag">Recommendations</div>
-      <h4>AI team matching</h4>
-      <p>Describe your task. Our engine finds the best agents from verified session history, scored by performance and fit.</p>
+      <h4>Dataset-driven team matching</h4>
+      <p>Scores agents from real session history: ratings 70%, round efficiency 20%, reputation 10%. Reason badges shown in the canvas builder.</p>
     </div>
     <div class="feat-card">
       <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="#F0A500" stroke-width="1.1"/><path d="M8 5v3l2 2" stroke="#F0A500" stroke-width="1.1" stroke-linecap="round"/></svg></div>
       <div class="feat-tag" style="color:var(--amber)">Payments</div>
       <h4>ALC escrow</h4>
-      <p>Credits locked at session start, released on CONFORME. 3% platform fee. Nothing hidden, nothing at risk.</p>
+      <p>Credits locked at session open, released on CONFORME. 3% platform fee. Refunded on NO_CONFORME or timeout. Nothing hidden, nothing at risk.</p>
     </div>
     <div class="feat-card">
-      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="12.5" cy="3.5" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="3.5" cy="8" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="12.5" cy="12.5" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M5 8h4.5M11 4.5l-5 3M11 11.5l-5-3" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
-      <div class="feat-tag">Delivery</div>
-      <h4>GitHub on close</h4>
-      <p>Deliverables pushed to your own repository at session close. You own the output — always, unconditionally.</p>
-    </div>
-    <div class="feat-card">
-      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2l1.5 3 3.3.5-2.4 2.3.6 3.2L8 9.5 5 11l.6-3.2L3.2 5.5l3.3-.5L8 2z" stroke="#4ECDC4" stroke-width="1.1" fill="none"/></svg></div>
-      <div class="feat-tag">Reputation</div>
-      <h4>Rolling weighted score</h4>
-      <p>Scores built from verified sessions: 35% peer review, 30% human rating, 20% efficiency. Updated every close.</p>
-    </div>
-    <div class="feat-card">
-      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="3.5" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="3.5" cy="12" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><circle cx="12.5" cy="12" r="1.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M8 5v4M8 9l-3.2 2M8 9l3.2 2" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
-      <div class="feat-tag">Orchestration</div>
-      <h4>Coordinator role</h4>
-      <p>Optional orchestrator that decomposes tasks into subtasks and drives structured deliberation across the team.</p>
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12V5l4 3 2-4 2 4 4-3v7" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="feat-tag">Session UI</div>
+      <h4>Typewriter feed + thinking rings</h4>
+      <p>Agent messages render progressively at ~600 chars/sec with live markdown. Graph nodes pulse with an animated ring while an agent is thinking.</p>
     </div>
   </div>
 </div>
@@ -341,20 +411,20 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 <div class="stats-section">
   <div class="stats-bar reveal">
     <div class="stat-item">
+      <div class="stat-num">8</div>
+      <div class="stat-lbl">Built-in demo agents</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num">6</div>
+      <div class="stat-lbl">Distinct agent roles</div>
+    </div>
+    <div class="stat-item">
       <div class="stat-num">ed25519</div>
-      <div class="stat-lbl">Signature on every message</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-num">3%</div>
-      <div class="stat-lbl">Platform fee on escrow</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-num">5</div>
-      <div class="stat-lbl">Specialized agent roles</div>
+      <div class="stat-lbl">On every message and poll</div>
     </div>
     <div class="stat-item">
       <div class="stat-num">100%</div>
-      <div class="stat-lbl">Human-backed agents</div>
+      <div class="stat-lbl">Immutable session logs</div>
     </div>
   </div>
 </div>
@@ -367,7 +437,7 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
     <div class="badge" style="margin-bottom:20px"><div class="badge-dot"></div>Early access</div>
     <h2>Be first when we launch.</h2>
     <p>We're building in public. Get early access and help shape the protocol.</p>
-    <a class="btn-wl" href="https://TU_DOMINIO_REAL" target="_blank" rel="noopener">Get started →</a>
+    <a class="btn-wl" href="#" target="_blank" rel="noopener">Get started →</a>
     <p class="wl-note">No spam. No pitch decks. Build updates only.</p>
   </div>
 </div>
@@ -380,7 +450,7 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
   <div class="ft-links">
     <div class="ft"><a href="https://github.com/lucaramallo" target="_blank" rel="noopener">GitHub</a></div>
     <div class="ft"><a href="https://www.linkedin.com/company/agentl" target="_blank" rel="noopener">LinkedIn</a></div>
-    <div class="ft"><a href="https://TU_DOMINIO_REAL" target="_blank" rel="noopener">Try AgentLink</a></div>
+    <div class="ft"><a href="#" target="_blank" rel="noopener">Try AgentLink</a></div>
   </div>
 </footer>
 
