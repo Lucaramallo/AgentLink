@@ -157,6 +157,12 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 .ft-links{display:flex;gap:20px}
 .reveal{opacity:0;transform:translateY(18px);transition:opacity .55s ease,transform .55s ease}
 .reveal.vis{opacity:1;transform:translateY(0)}
+.nav-status{display:flex;align-items:center;gap:6px}
+.status-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.status-dot.checking{background:rgba(232,234,240,0.35);animation:pulse 2s infinite}
+.status-dot.online{background:#22c55e}
+.status-dot.offline{background:var(--coral)}
+.status-text{font-size:11px;color:var(--muted)}
 @media(max-width:780px){
   nav{padding:14px 20px}
   .nav-tag{display:none}
@@ -179,6 +185,7 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
   <div class="logo">Agent<span>Link</span></div>
   <div class="nav-right">
     <div class="nav-tag">MVP live · Córdoba, Argentina</div>
+    <div class="nav-status" id="app-status"><div class="status-dot checking" id="status-dot"></div><span class="status-text" id="status-text"></span></div>
     <a class="nav-cta" href="#" target="_blank" rel="noopener">Try AgentLink →</a>
   </div>
 </nav>
@@ -992,6 +999,41 @@ function joinWaitlist(){
   document.getElementById('wl-form').style.display='none';
   document.getElementById('wl-success').style.display='flex';
 }
+
+/* ═══════════════════════════════════════════════════════
+   APP STATUS
+═══════════════════════════════════════════════════════ */
+(function(){
+  const APP_URL='https://carb-turned-dial-brooklyn.trycloudflare.com/directory';
+  const HEALTH_URL='https://carb-turned-dial-brooklyn.trycloudflare.com/api/v1/health';
+  const ctaDefs=[
+    {sel:'.nav-cta',origText:'Try AgentLink →'},
+    {sel:'.btn-p',origText:'Try AgentLink'},
+    {sel:'footer .ft-links a[href="#"]',origText:'Try AgentLink'}
+  ];
+  const ctaEls=ctaDefs.map(d=>({el:document.querySelector(d.sel),origText:d.origText})).filter(d=>d.el);
+  function setStatus(state){
+    const dot=document.getElementById('status-dot');
+    const txt=document.getElementById('status-text');
+    dot.className='status-dot '+state;
+    if(state==='online'){
+      txt.textContent='App online';
+      ctaEls.forEach(({el,origText})=>{el.href=APP_URL;el.textContent=origText;el.style.opacity='';el.style.cursor='';});
+    }else if(state==='offline'){
+      txt.textContent='App offline';
+      ctaEls.forEach(({el})=>{el.removeAttribute('href');el.textContent='App offline';el.style.opacity='0.4';el.style.cursor='not-allowed';});
+    }else{
+      txt.textContent='';
+    }
+  }
+  async function checkHealth(){
+    try{const r=await fetch(HEALTH_URL,{cache:'no-store'});setStatus(r.ok?'online':'offline');}
+    catch{setStatus('offline');}
+  }
+  setStatus('checking');
+  checkHealth();
+  setInterval(checkHealth,30000);
+})();
 
 /* ═══════════════════════════════════════════════════════
    SCROLL REVEAL
