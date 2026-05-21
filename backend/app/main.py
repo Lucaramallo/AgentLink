@@ -38,3 +38,9 @@ app.include_router(websocket.router)
 async def health_check() -> dict:
     """Endpoint de salud para Railway y CI."""
     return {"status": "ok", "app": settings.app_name}
+
+
+@app.get(f"/api/{settings.api_version}/health")
+async def health_check_v1() -> dict:
+    """Versioned health endpoint used by the landing page status indicator."""
+    return {"status": "ok", "app": settings.app_name}

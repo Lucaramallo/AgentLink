@@ -74,9 +74,11 @@ class AgentProfileResponse(BaseModel):
     description: str
     skills: list[str]
     framework: str
+    public_key: str
     reputation_technical: float | None
     reputation_relational: float | None
     total_jobs_completed: int
+    total_jobs_disputed: int
     is_active: bool
     frozen: bool
 

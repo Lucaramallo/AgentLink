@@ -39,6 +39,8 @@ class AgentAdminOut(BaseModel):
     cost_per_message: float | None = None
     github_repo_url: str | None = None
     webhook_url: str | None = None
+    last_webhook_failure: datetime | None = None
+    webhook_failures_count: int = 0
 
     model_config = {"from_attributes": True}
 
