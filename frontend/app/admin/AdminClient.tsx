@@ -415,6 +415,7 @@ export default function AdminClient() {
   }
 
   async function submitRegisterAgent() {
+    if (registerSaving) return;
     const form = registerFormRef.current;
     setRegisterSaving(true);
     setRegisterError(null);
