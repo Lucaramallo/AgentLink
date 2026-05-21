@@ -202,24 +202,13 @@ export default function AdminClient() {
         if (pendingRegisterRef.current) {
           pendingRegisterRef.current = false;
           setRegisterOauthLoading(false);
-          if (registerFormRef.current.name) {
-            if (registerFormRef.current.github_repo_url) {
-              submitRegisterAgentRef.current();
-            } else {
-              fetchGithubRepos().then(repos => {
-                setGithubRepos(repos);
-                setGithubReposLoaded(true);
-                if (repos.length > 0) {
-                  const firstUrl = repos[0].html_url;
-                  registerFormRef.current = { ...registerFormRef.current, github_repo_url: firstUrl };
-                  setRegisterForm(f => ({ ...f, github_repo_url: firstUrl }));
-                  submitRegisterAgentRef.current();
-                } else {
-                  setRegisterError("No GitHub repos found. Please enter your repo URL and register manually.");
-                }
-              });
+          fetchGithubRepos().then(repos => {
+            setGithubRepos(repos);
+            setGithubReposLoaded(true);
+            if (repos.length > 0) {
+              setRegisterForm(f => ({ ...f, github_repo_url: repos[0].html_url }));
             }
-          }
+          });
         }
       } else if (e.data?.type === "github-oauth-error") {
         setGithubOauthError((e.data.error as string | undefined) ?? "OAuth failed.");
@@ -339,6 +328,21 @@ export default function AdminClient() {
       if (!url) throw new Error("Could not start GitHub OAuth.");
       if (popup) {
         popup.location.href = url;
+        // Poll for popup close. If it closes before the postMessage arrives
+        // (e.g. user dismissed it, or window.opener was unavailable in the callback),
+        // release the stuck "Connecting…" state after a brief grace period.
+        const pollId = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(pollId);
+            setTimeout(() => {
+              if (pendingRegisterRef.current) {
+                pendingRegisterRef.current = false;
+                setRegisterOauthLoading(false);
+                setRegisterError("GitHub connection was not completed. Please try again.");
+              }
+            }, 600);
+          }
+        }, 400);
       } else {
         throw new Error("Popup blocked. Allow popups for this site and try again.");
       }
