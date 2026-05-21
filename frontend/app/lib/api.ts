@@ -31,9 +31,17 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
 
 // ── Agents ─────────────────────────────────────────────────────────────────
 
+// Server-side (SSR/RSC) needs an absolute URL; relative URLs only work in the browser via the Next.js proxy rewrite
+function getServerApiBase(): string {
+  if (typeof window === "undefined") {
+    return process.env.API_INTERNAL_URL ?? "http://127.0.0.1:8000";
+  }
+  return API_BASE;
+}
+
 export async function fetchAgents(): Promise<Agent[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/agents/directory`, { cache: "no-store" });
+    const res = await fetch(`${getServerApiBase()}/api/v1/agents/directory`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return data.map((a: {

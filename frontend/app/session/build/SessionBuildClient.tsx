@@ -87,6 +87,10 @@ const HUMAN_STUB: Agent = {
   jobsCompleted: 0,
   total_jobs_disputed: 0,
   is_active: true, frozen: false,
+  session_fee: 0,
+  cost_per_message: 0,
+  webhook_url: null,
+  github_repo_url: null,
 };
 
 const HUMAN_COLOR = "#F0A500";
@@ -341,6 +345,8 @@ export default function SessionBuildClient() {
             reputationTech: ra.reputationTech, reputationRel: ra.reputationRel,
             jobsCompleted: ra.jobsCompleted, total_jobs_disputed: ra.total_jobs_disputed,
             is_active: ra.is_active, frozen: ra.frozen,
+            session_fee: 0, cost_per_message: 0,
+            webhook_url: null, github_repo_url: null,
           };
           const total = data.recommendedAgents!.length;
           const angle = total === 1 ? -Math.PI / 2 : (i / total) * 2 * Math.PI - Math.PI / 2;
