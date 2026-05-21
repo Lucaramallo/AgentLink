@@ -114,7 +114,7 @@ async def create_owner(
         select(HumanOwner).where(HumanOwner.email == payload.email)
     )
     if result.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email ya registrado.")
+        raise HTTPException(status_code=409, detail="Email already registered.")
 
     owner = HumanOwner(email=payload.email)
     db.add(owner)
@@ -135,7 +135,7 @@ async def register_agent(
     # Verificar que el owner existe
     owner = await db.get(HumanOwner, payload.human_owner_id)
     if not owner:
-        raise HTTPException(status_code=404, detail="HumanOwner no encontrado.")
+        raise HTTPException(status_code=404, detail="HumanOwner not found.")
 
     keypair = generate_keypair()
 
@@ -174,7 +174,7 @@ async def get_agent(
     """Obtiene el perfil público de un agente."""
     agent = await db.get(Agent, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+        raise HTTPException(status_code=404, detail="Agent not found.")
     return AgentPublicResponse.model_validate(agent)
 
 
@@ -195,9 +195,9 @@ async def regenerate_agent_key(
     """
     agent = await db.get(Agent, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+        raise HTTPException(status_code=404, detail="Agent not found.")
     if agent.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para modificar este agente.")
+        raise HTTPException(status_code=403, detail="You do not have permission to modify this agent.")
 
     keypair = generate_keypair()
     agent.public_key = keypair.public_key_b64
@@ -216,9 +216,9 @@ async def update_agent(
     """Actualiza los campos editables de un agente propio."""
     agent = await db.get(Agent, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+        raise HTTPException(status_code=404, detail="Agent not found.")
     if agent.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para editar este agente.")
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this agent.")
 
     if payload.name is not None:
         agent.name = payload.name
@@ -293,12 +293,12 @@ async def register_owned_agent(
     if not current_user.github_access_token:
         raise HTTPException(
             status_code=400,
-            detail="Debes conectar tu cuenta de GitHub antes de registrar agentes.",
+            detail="You must connect your GitHub account before registering agents.",
         )
 
     access_token = _decrypt_token(current_user.github_access_token)
     if not access_token:
-        raise HTTPException(status_code=400, detail="Token de GitHub inválido. Reconecta tu cuenta.")
+        raise HTTPException(status_code=400, detail="Invalid GitHub token. Please reconnect your account.")
 
     # Verify repo belongs to user via GitHub API
     # github_repo_url looks like https://github.com/owner/repo
@@ -314,16 +314,16 @@ async def register_owned_agent(
         )
 
     if repo_resp.status_code == 404:
-        raise HTTPException(status_code=400, detail="Repositorio no encontrado o sin acceso.")
+        raise HTTPException(status_code=400, detail="Repository not found or access denied.")
     if repo_resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Error verificando repositorio en GitHub.")
+        raise HTTPException(status_code=502, detail="Error verifying repository on GitHub.")
 
     repo_data = repo_resp.json()
     repo_owner = repo_data.get("owner", {}).get("login", "")
     if repo_owner.lower() != (current_user.github_username or "").lower():
         raise HTTPException(
             status_code=403,
-            detail=f"El repositorio no te pertenece. Owner: {repo_owner}",
+            detail=f"Repository does not belong to you. Owner: {repo_owner}",
         )
 
     # Test webhook reachability before creating the agent (non-whitelisted only)
@@ -404,11 +404,11 @@ async def test_agent_webhook(
     """
     agent = await db.get(Agent, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+        raise HTTPException(status_code=404, detail="Agent not found.")
     if agent.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para testear este agente.")
+        raise HTTPException(status_code=403, detail="You do not have permission to test this agent.")
     if not agent.webhook_url:
-        raise HTTPException(status_code=400, detail="Este agente no tiene webhook_url configurado.")
+        raise HTTPException(status_code=400, detail="This agent does not have a webhook_url configured.")
 
     result = await call_agent_webhook(
         agent=agent,
@@ -434,9 +434,9 @@ async def reset_webhook_failures(
     """
     agent = await db.get(Agent, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agente no encontrado.")
+        raise HTTPException(status_code=404, detail="Agent not found.")
     if agent.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para modificar este agente.")
+        raise HTTPException(status_code=403, detail="You do not have permission to modify this agent.")
 
     agent.webhook_failures_count = 0
     agent.last_webhook_failure = None

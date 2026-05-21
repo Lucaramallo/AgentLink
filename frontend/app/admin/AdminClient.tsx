@@ -202,8 +202,23 @@ export default function AdminClient() {
         if (pendingRegisterRef.current) {
           pendingRegisterRef.current = false;
           setRegisterOauthLoading(false);
-          if (registerFormRef.current.name && registerFormRef.current.github_repo_url) {
-            submitRegisterAgentRef.current();
+          if (registerFormRef.current.name) {
+            if (registerFormRef.current.github_repo_url) {
+              submitRegisterAgentRef.current();
+            } else {
+              fetchGithubRepos().then(repos => {
+                setGithubRepos(repos);
+                setGithubReposLoaded(true);
+                if (repos.length > 0) {
+                  const firstUrl = repos[0].html_url;
+                  registerFormRef.current = { ...registerFormRef.current, github_repo_url: firstUrl };
+                  setRegisterForm(f => ({ ...f, github_repo_url: firstUrl }));
+                  submitRegisterAgentRef.current();
+                } else {
+                  setRegisterError("No GitHub repos found. Please enter your repo URL and register manually.");
+                }
+              });
+            }
           }
         }
       } else if (e.data?.type === "github-oauth-error") {
@@ -400,18 +415,19 @@ export default function AdminClient() {
   }
 
   async function submitRegisterAgent() {
+    const form = registerFormRef.current;
     setRegisterSaving(true);
     setRegisterError(null);
     try {
       const result = await registerOwnedAgent({
-        name: registerForm.name,
-        description: registerForm.description,
-        skills: registerForm.skills.split(",").map(s => s.trim()).filter(Boolean),
-        framework: registerForm.framework,
-        session_fee: registerForm.session_fee !== "" ? parseFloat(registerForm.session_fee) : null,
-        cost_per_message: registerForm.cost_per_message !== "" ? parseFloat(registerForm.cost_per_message) : null,
-        github_repo_url: registerForm.github_repo_url,
-        webhook_url: registerForm.webhook_url || null,
+        name: form.name,
+        description: form.description,
+        skills: form.skills.split(",").map(s => s.trim()).filter(Boolean),
+        framework: form.framework,
+        session_fee: form.session_fee !== "" ? parseFloat(form.session_fee) : null,
+        cost_per_message: form.cost_per_message !== "" ? parseFloat(form.cost_per_message) : null,
+        github_repo_url: form.github_repo_url,
+        webhook_url: form.webhook_url || null,
       });
       if (result) {
         setRegisterSuccess(`Agent registered! Save your private key — shown only once:\n${result.private_key_b64}`);
@@ -827,12 +843,12 @@ export default function AdminClient() {
                   {!githubConnected ? (
                     <button
                       onClick={connectGithubForRegister}
-                      disabled={registerOauthLoading || !registerForm.name || !registerForm.github_repo_url}
+                      disabled={registerOauthLoading || !registerForm.name}
                       style={{
                         background: "#F59E0B", border: "none", color: "#070B14", padding: "8px 18px",
                         borderRadius: 8, fontSize: 13, fontWeight: 600,
-                        cursor: (registerOauthLoading || !registerForm.name || !registerForm.github_repo_url) ? "not-allowed" : "pointer",
-                        opacity: (registerOauthLoading || !registerForm.name || !registerForm.github_repo_url) ? 0.7 : 1,
+                        cursor: (registerOauthLoading || !registerForm.name) ? "not-allowed" : "pointer",
+                        opacity: (registerOauthLoading || !registerForm.name) ? 0.7 : 1,
                       }}
                     >
                       {registerOauthLoading ? "Connecting…" : "Connect GitHub & Register"}
