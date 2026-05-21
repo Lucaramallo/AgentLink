@@ -1203,6 +1203,13 @@ export default function SessionRoomClient() {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
   }
 
+  function extractAgentId(agentId: string, label: string): string {
+    const stripped = agentId.startsWith("node-") ? agentId.slice(5) : agentId;
+    const bareUuid = stripped.length > 36 ? stripped.slice(0, 36) : stripped;
+    if (isUUID(bareUuid)) return bareUuid;
+    return toDemoSlug(label);
+  }
+
   function sortAgentsByPriority(agentList: GraphNode[]): GraphNode[] {
     const priority = (role: string): number => {
       if (role === "Reviewer") return 1;
@@ -1537,7 +1544,7 @@ export default function SessionRoomClient() {
 
       try {
         // Send UUID if the node id is a real agent UUID, otherwise use the demo slug
-        const agentIdToSend = isUUID(agent.id) ? agent.id : toDemoSlug(agent.label);
+        const agentIdToSend = extractAgentId(agent.id, agent.label);
 
         // Fetch tree if we have a repo but tree is empty (e.g. after page refresh)
         if (sessionGithubRepo && repoTreeRef.current.length === 0 && token) {
@@ -1664,7 +1671,7 @@ export default function SessionRoomClient() {
     async function coordinatorEvaluateRound(round: number, ctx: Message[]): Promise<"continue" | "done"> {
       if (coordinators.length === 0) return "done"; // no coordinator → always vote
       const coord = coordinators[0];
-      const agentIdToSend = isUUID(coord.id) ? coord.id : toDemoSlug(coord.label);
+      const agentIdToSend = extractAgentId(coord.id, coord.label);
 
       // Build summary: last message per agent
       const agentSummaries = [...agents, ...coordinators]
@@ -1748,7 +1755,7 @@ export default function SessionRoomClient() {
           `Should the team open another round to continue improving the work, or is the current output sufficient to proceed to the final deliverable?\n\n` +
           `Reply with exactly one word: YES (open another round) or NO (proceed to final).`;
 
-        const agentIdToSend = isUUID(voter.id) ? voter.id : toDemoSlug(voter.label);
+        const agentIdToSend = extractAgentId(voter.id, voter.label);
         let vote: "yes" | "no" = "yes";
         try {
           const res = await fetch(`${API}/agents/respond`, {
@@ -2035,7 +2042,7 @@ export default function SessionRoomClient() {
       `Reply with ONLY the number of the option you choose (0, 1, 2, or 3). No other text.`;
 
     eligibleAgents.forEach((agent) => {
-      const agentIdToSend = isUUID(agent.id) ? agent.id : toDemoSlug(agent.label);
+      const agentIdToSend = extractAgentId(agent.id, agent.label);
       fetch(`${API}/agents/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
