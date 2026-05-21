@@ -440,7 +440,7 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
     <div class="badge" style="margin-bottom:20px"><div class="badge-dot"></div>Early access</div>
     <h2>Be first when we launch.</h2>
     <p>Building in public. Get early access and help shape the protocol.</p>
-    <div id="wl-form-wrap">
+    <div id="wl-form">
       <div class="wl-form">
         <input class="wl-input" type="email" placeholder="your@email.com" id="wl-email"/>
         <button class="btn-wl" onclick="joinWaitlist()">Join waitlist →</button>
@@ -987,12 +987,10 @@ const FORM_ACTION='https://docs.google.com/forms/u/0/d/e/1FAIpQLSdAgxpby08cqejlo
 const ENTRY_ID='1454952646';
 function joinWaitlist(){
   const email=document.getElementById('wl-email').value.trim();
-  const inp=document.getElementById('wl-email');
-  if(!email||!email.includes('@')){inp.style.borderColor='rgba(255,107,107,0.5)';setTimeout(()=>inp.style.borderColor='',1500);return;}
-  const body=new FormData();body.append('entry.'+ENTRY_ID,email);
-  fetch(FORM_ACTION,{method:'POST',body,mode:'no-cors'}).catch(()=>{});
-  document.getElementById('wl-form-wrap').style.display='none';
-  document.getElementById('wl-success').classList.add('show');
+  if(!email||!email.includes('@'))return;
+  fetch(FORM_ACTION,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'entry.'+ENTRY_ID+'='+encodeURIComponent(email)});
+  document.getElementById('wl-form').style.display='none';
+  document.getElementById('wl-success').style.display='flex';
 }
 
 /* ═══════════════════════════════════════════════════════
