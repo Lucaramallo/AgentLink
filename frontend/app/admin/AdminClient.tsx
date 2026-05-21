@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../lib/auth";
@@ -134,6 +134,11 @@ export default function AdminClient() {
   const [registerSaving, setRegisterSaving] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerSuccess, setRegisterSuccess] = useState<string | null>(null);
+  const [registerOauthLoading, setRegisterOauthLoading] = useState(false);
+
+  const pendingRegisterRef = useRef(false);
+  const submitRegisterAgentRef = useRef<() => Promise<void>>(async () => {});
+  const registerFormRef = useRef(registerForm);
 
   const [regenConfirmAgent, setRegenConfirmAgent] = useState<AdminAgent | null>(null);
   const [regenNewKey, setRegenNewKey] = useState<string | null>(null);
@@ -183,6 +188,10 @@ export default function AdminClient() {
     if (user?.full_name) setSettingsForm(f => ({ ...f, displayName: user.full_name }));
   }, [user?.full_name]);
 
+  // Keep refs pointing at latest closures on every render.
+  useEffect(() => { submitRegisterAgentRef.current = submitRegisterAgent; });
+  useEffect(() => { registerFormRef.current = registerForm; });
+
   useEffect(() => {
     function handleGithubMessage(e: MessageEvent) {
       if (e.origin !== window.location.origin) return;
@@ -190,9 +199,21 @@ export default function AdminClient() {
         if (e.data.token && e.data.user) login(e.data.token as string, e.data.user);
         setGithubOauthLoading(false);
         setGithubOauthError(null);
+        if (pendingRegisterRef.current) {
+          pendingRegisterRef.current = false;
+          setRegisterOauthLoading(false);
+          if (registerFormRef.current.name && registerFormRef.current.github_repo_url) {
+            submitRegisterAgentRef.current();
+          }
+        }
       } else if (e.data?.type === "github-oauth-error") {
         setGithubOauthError((e.data.error as string | undefined) ?? "OAuth failed.");
         setGithubOauthLoading(false);
+        if (pendingRegisterRef.current) {
+          pendingRegisterRef.current = false;
+          setRegisterOauthLoading(false);
+          setRegisterError("GitHub connection failed. Please try again.");
+        }
       }
     }
     window.addEventListener("message", handleGithubMessage);
@@ -283,6 +304,34 @@ export default function AdminClient() {
     } catch (err) {
       setGithubOauthError(err instanceof Error ? err.message : "OAuth failed.");
       setGithubOauthLoading(false);
+    }
+  }
+
+  function closeRegisterModal() {
+    setShowRegisterModal(false);
+    pendingRegisterRef.current = false;
+    setRegisterOauthLoading(false);
+  }
+
+  async function connectGithubForRegister() {
+    pendingRegisterRef.current = true;
+    setRegisterOauthLoading(true);
+    setRegisterError(null);
+    // Open popup synchronously before any await so browsers allow it, then navigate.
+    const popup = window.open("", "github-oauth", "width=600,height=700,left=300,top=100");
+    try {
+      const url = await fetchGithubOAuthUrl();
+      if (!url) throw new Error("Could not start GitHub OAuth.");
+      if (popup) {
+        popup.location.href = url;
+      } else {
+        throw new Error("Popup blocked. Allow popups for this site and try again.");
+      }
+    } catch (err) {
+      if (popup) popup.close();
+      pendingRegisterRef.current = false;
+      setRegisterError(err instanceof Error ? err.message : "OAuth failed.");
+      setRegisterOauthLoading(false);
     }
   }
 
@@ -647,18 +696,14 @@ export default function AdminClient() {
           <div style={{ background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 14, padding: "32px", width: 540, maxHeight: "90vh", overflowY: "auto" }}>
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: "#E2E8F0" }}>Register New Agent</h2>
 
-            {!githubConnected ? (
-              <div style={{ color: "#F59E0B", fontSize: 14, marginBottom: 20 }}>
-                Connect your GitHub account first to register agents.
-              </div>
-            ) : registerSuccess ? (
+            {registerSuccess ? (
               <div>
                 <div style={{ color: "#4ECDC4", fontSize: 14, marginBottom: 12 }}>Agent registered successfully!</div>
                 <div style={{ background: "#111827", border: "1px solid #1E2D4A", borderRadius: 8, padding: 14, fontSize: 12, color: "#F59E0B", wordBreak: "break-all", whiteSpace: "pre-wrap" }}>
                   {registerSuccess}
                 </div>
                 <button
-                  onClick={() => setShowRegisterModal(false)}
+                  onClick={closeRegisterModal}
                   style={{ marginTop: 20, background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
                 >
                   Close
@@ -666,6 +711,15 @@ export default function AdminClient() {
               </div>
             ) : (
               <>
+                {!githubConnected && (
+                  <div style={{
+                    background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)",
+                    borderRadius: 8, padding: "10px 14px", marginBottom: 20, fontSize: 13, color: "#F59E0B",
+                  }}>
+                    GitHub account required to register agents. Fill in the form and click "Connect GitHub &amp; Register" below.
+                  </div>
+                )}
+
                 {[
                   { key: "name", label: "Name" },
                   { key: "description", label: "Description" },
@@ -765,18 +819,33 @@ export default function AdminClient() {
 
                 <div style={{ display: "flex", gap: 10, marginTop: 24, justifyContent: "flex-end" }}>
                   <button
-                    onClick={() => setShowRegisterModal(false)}
+                    onClick={closeRegisterModal}
                     style={{ background: "transparent", border: "1px solid #1E2D4A", color: "#94A3B8", padding: "8px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}
                   >
                     Cancel
                   </button>
-                  <button
-                    onClick={submitRegisterAgent}
-                    disabled={registerSaving || !registerForm.name || !registerForm.github_repo_url}
-                    style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: (registerSaving || !registerForm.name || !registerForm.github_repo_url) ? "not-allowed" : "pointer", opacity: (registerSaving || !registerForm.name || !registerForm.github_repo_url) ? 0.7 : 1 }}
-                  >
-                    {registerSaving ? "Registering…" : "Register Agent"}
-                  </button>
+                  {!githubConnected ? (
+                    <button
+                      onClick={connectGithubForRegister}
+                      disabled={registerOauthLoading || !registerForm.name || !registerForm.github_repo_url}
+                      style={{
+                        background: "#F59E0B", border: "none", color: "#070B14", padding: "8px 18px",
+                        borderRadius: 8, fontSize: 13, fontWeight: 600,
+                        cursor: (registerOauthLoading || !registerForm.name || !registerForm.github_repo_url) ? "not-allowed" : "pointer",
+                        opacity: (registerOauthLoading || !registerForm.name || !registerForm.github_repo_url) ? 0.7 : 1,
+                      }}
+                    >
+                      {registerOauthLoading ? "Connecting…" : "Connect GitHub & Register"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={submitRegisterAgent}
+                      disabled={registerSaving || !registerForm.name || !registerForm.github_repo_url}
+                      style={{ background: "#4ECDC4", border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: (registerSaving || !registerForm.name || !registerForm.github_repo_url) ? "not-allowed" : "pointer", opacity: (registerSaving || !registerForm.name || !registerForm.github_repo_url) ? 0.7 : 1 }}
+                    >
+                      {registerSaving ? "Registering…" : "Register Agent"}
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -854,14 +923,14 @@ export default function AdminClient() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
               <h1 style={{ fontSize: 24, fontWeight: 700 }}>My Agents</h1>
               <button
-                onClick={githubConnected ? openRegisterModal : connectGithub}
+                onClick={openRegisterModal}
                 style={{
-                  background: githubConnected ? "#4ECDC4" : "#F59E0B",
+                  background: "#4ECDC4",
                   border: "none", color: "#070B14", padding: "8px 18px", borderRadius: 8,
                   fontSize: 13, fontWeight: 600, cursor: "pointer",
                 }}
               >
-                {githubConnected ? "+ Register New Agent" : "Connect GitHub First"}
+                + Register New Agent
               </button>
             </div>
             <p style={{ color: "#64748B", marginBottom: 24, fontSize: 14 }}>Manage and monitor all agents you own.</p>
