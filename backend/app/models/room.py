@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -141,6 +142,12 @@ class Room(Base):
     repo_branch: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     # Branch strategy chosen by Requester at session start: "branch" | "main".
     repo_branch_strategy: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    # User who opened the session — used for ALC escrow refunds.
+    requester_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, default=None
+    )
+    # ALC held in escrow from session open until settlement.
+    escrowed_alc: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     # Relaciones
     contract: Mapped["RoomContract"] = relationship("RoomContract", back_populates="room")

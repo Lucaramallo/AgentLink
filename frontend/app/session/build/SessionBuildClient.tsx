@@ -1265,9 +1265,8 @@ export default function SessionBuildClient() {
       const agentAId = agentANode.agent.id;
       const agentBId = agentBNode.agent.id;
 
-      const contractRes = await fetch(`${API_BASE}/rooms/contracts`, {
+      const contractRes = await apiFetch("/rooms/contracts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task_description: task,
           deliverable_spec: criteria,
@@ -1280,27 +1279,29 @@ export default function SessionBuildClient() {
       if (!contractRes.ok) throw new Error(`Failed to create contract (${contractRes.status})`);
       const { contract_id } = await contractRes.json();
 
-      const signA = await fetch(`${API_BASE}/rooms/contracts/${contract_id}/sign?side=a`, {
+      const signA = await apiFetch(`/rooms/contracts/${contract_id}/sign?side=a`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ owner_id: OWNER_A }),
       });
       if (!signA.ok) throw new Error(`Failed to sign contract side A (${signA.status})`);
 
-      const signB = await fetch(`${API_BASE}/rooms/contracts/${contract_id}/sign?side=b`, {
+      const signB = await apiFetch(`/rooms/contracts/${contract_id}/sign?side=b`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ owner_id: OWNER_B }),
       });
       if (!signB.ok) throw new Error(`Failed to sign contract side B (${signB.status})`);
 
-      const roomUrl = new URL(`${API_BASE}/rooms`);
-      roomUrl.searchParams.set("contract_id", contract_id);
-      roomUrl.searchParams.set("agent_a_id", agentAId);
-      roomUrl.searchParams.set("agent_b_id", agentBId);
-      if (githubRepo.trim()) roomUrl.searchParams.set("github_repo_url", githubRepo.trim());
-      const roomRes = await fetch(roomUrl.toString(), { method: "POST" });
-      if (!roomRes.ok) throw new Error(`Failed to open room (${roomRes.status})`);
+      const roomParams = new URLSearchParams({
+        contract_id,
+        agent_a_id: agentAId,
+        agent_b_id: agentBId,
+        ...(githubRepo.trim() ? { github_repo_url: githubRepo.trim() } : {}),
+      });
+      const roomRes = await apiFetch(`/rooms?${roomParams.toString()}`, { method: "POST" });
+      if (!roomRes.ok) {
+        const errBody = await roomRes.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Failed to open room (${roomRes.status})`);
+      }
       const { room_id } = await roomRes.json();
 
       const rateMap: Record<string, number> = {};
@@ -1353,9 +1354,8 @@ export default function SessionBuildClient() {
       );
 
       // Register session graph with backend before navigating — coordinator/generate depends on it.
-      const sgRes = await fetch(`${API_BASE}/rooms/${room_id}/session-graph`, {
+      const sgRes = await apiFetch(`/rooms/${room_id}/session-graph`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           agents: nodes.filter((n) => !n.isHuman).map((n) => ({
             id: n.id,

@@ -33,7 +33,7 @@ from app.models.room import (
 from app.models.user import User
 from app.services.github_delivery import deliver_to_github
 from app.services.identity import sign_message, verify_signature
-from app.services.room_manager import create_room, process_deliverable
+from app.services.room_manager import create_room, process_deliverable, refund_room_escrow
 from app.services.round_state import (
     get_round_state,
     initialize_round,
@@ -178,18 +178,31 @@ async def open_room(
     agent_a_id: uuid.UUID,
     agent_b_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     github_repo_url: str | None = Query(None),
 ) -> dict:
-    """Abre la sala cuando el contrato está firmado por ambos dueños."""
+    """Abre la sala cuando el contrato está firmado por ambos dueños.
+
+    Deducts ALC session fees from the requester's balance into escrow.
+    Returns 400 if the balance is insufficient.
+    """
     contract = await db.get(RoomContract, contract_id)
     if not contract:
         raise HTTPException(status_code=404, detail="Contrato no encontrado.")
 
     try:
-        room = await create_room(db, agent_a_id, agent_b_id, contract, github_repo_url=github_repo_url)
+        room = await create_room(
+            db,
+            agent_a_id,
+            agent_b_id,
+            contract,
+            github_repo_url=github_repo_url,
+            requester_user_id=current_user.id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    await db.commit()
     return {"room_id": str(room.room_id), "status": room.status}
 
 
@@ -251,6 +264,7 @@ async def submit_verdict(
         raise HTTPException(status_code=400, detail="Veredicto debe ser CONFORME o NO_CONFORME.")
 
     room = await process_deliverable(db, room, payload.verdict, payload.reason)
+    await db.commit()
 
     if payload.verdict == "CONFORME":
         from app.services.dataset_service import collect_session_data as _collect
@@ -316,17 +330,18 @@ async def agent_dropped(
         room.status = RoomStatus.CLOSED
         room.outcome = RoomOutcome.INCOMPLETE
         room.closed_at = datetime.now(timezone.utc)
-        # Also mark the agent as dropped for audit trail
         current = list(room.dropped_agents or [])
         if payload.agent_id not in current:
             current.append(payload.agent_id)
             room.dropped_agents = current
             flag_modified(room, "dropped_agents")
-        await db.flush()
+        refunded = room.escrowed_alc
+        await refund_room_escrow(db, room)
+        await db.commit()
         return {
             "status": "closed",
             "outcome": "INCOMPLETE",
-            "refund": "full",
+            "refunded_alc": refunded,
         }
 
     raise HTTPException(status_code=400, detail="action must be 'continue_without' or 'close_session'.")
