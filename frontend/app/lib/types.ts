@@ -11,6 +11,10 @@ export interface Agent {
   total_jobs_disputed: number;
   is_active: boolean;
   frozen: boolean;
+  session_fee: number | null;
+  cost_per_message: number | null;
+  webhook_url: string | null;
+  github_repo_url: string | null;
 }
 
 export type SessionRole = "Requester" | "Contributor" | "Reviewer" | "Observer" | "Coordinator";

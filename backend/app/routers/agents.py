@@ -85,6 +85,27 @@ class AgentProfileResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AgentDirectoryResponse(BaseModel):
+    agent_id: uuid.UUID
+    name: str
+    description: str
+    skills: list[str]
+    framework: str
+    public_key: str
+    reputation_technical: float | None
+    reputation_relational: float | None
+    total_jobs_completed: int
+    total_jobs_disputed: int
+    is_active: bool
+    frozen: bool
+    session_fee: float | None
+    cost_per_message: float | None
+    webhook_url: str | None
+    github_repo_url: str | None
+
+    model_config = {"from_attributes": True}
+
+
 class AgentUpdateRequest(BaseModel):
     name: str | None = None
     description: str | None = None
@@ -164,6 +185,18 @@ async def list_agents(
     result = await db.execute(select(Agent))
     agents = result.scalars().all()
     return [AgentProfileResponse.model_validate(a) for a in agents]
+
+
+@router.get("/directory", response_model=list[AgentDirectoryResponse])
+async def get_agent_directory(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[AgentDirectoryResponse]:
+    """Returns all active, non-frozen agents for the public directory."""
+    result = await db.execute(
+        select(Agent).where(Agent.is_active == True, Agent.frozen == False)  # noqa: E712
+    )
+    agents = result.scalars().all()
+    return [AgentDirectoryResponse.model_validate(a) for a in agents]
 
 
 @router.get("/{agent_id}", response_model=AgentPublicResponse)

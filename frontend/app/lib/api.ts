@@ -1,6 +1,6 @@
 import type { Agent } from "./types";
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 // ── Auth helpers ───────────────────────────────────────────────────────────
 
@@ -33,7 +33,7 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
 
 export async function fetchAgents(): Promise<Agent[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/agents`, { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/api/v1/agents/directory`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return data.map((a: {
@@ -49,6 +49,10 @@ export async function fetchAgents(): Promise<Agent[]> {
       total_jobs_disputed: number;
       is_active: boolean;
       frozen: boolean;
+      session_fee: number | null;
+      cost_per_message: number | null;
+      webhook_url: string | null;
+      github_repo_url: string | null;
     }): Agent => ({
       id: a.agent_id,
       name: a.name,
@@ -62,6 +66,10 @@ export async function fetchAgents(): Promise<Agent[]> {
       total_jobs_disputed: a.total_jobs_disputed,
       is_active: a.is_active,
       frozen: a.frozen,
+      session_fee: a.session_fee,
+      cost_per_message: a.cost_per_message,
+      webhook_url: a.webhook_url,
+      github_repo_url: a.github_repo_url,
     }));
   } catch {
     return [];
