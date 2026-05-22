@@ -207,15 +207,18 @@ async def commit_file(
     slug = re.sub(r"[^a-z0-9]", "", agent_name.lower())
     author_email = f"{slug}@agentlink.ai"
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        existing_sha = None
+    async def _get_sha(client: httpx.AsyncClient) -> str | None:
         check = await client.get(
             f"{api_base}/contents/{file_path}",
             headers=hdrs,
             params={"ref": branch},
         )
         if check.status_code == 200:
-            existing_sha = check.json().get("sha")
+            return check.json().get("sha")
+        return None
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        existing_sha = await _get_sha(client)
 
         body: dict[str, Any] = {
             "message": commit_msg,
@@ -227,6 +230,16 @@ async def commit_file(
             body["sha"] = existing_sha
 
         resp = await client.put(f"{api_base}/contents/{file_path}", headers=hdrs, json=body)
+
+        # 409 Conflict / 422 Unprocessable: SHA is stale — refetch and retry once.
+        if resp.status_code in (409, 422):
+            fresh_sha = await _get_sha(client)
+            if fresh_sha:
+                body["sha"] = fresh_sha
+            elif "sha" in body:
+                del body["sha"]
+            resp = await client.put(f"{api_base}/contents/{file_path}", headers=hdrs, json=body)
+
         if resp.status_code not in (200, 201):
             raise ValueError(f"Commit failed: {resp.status_code} — {resp.text[:200]}")
 

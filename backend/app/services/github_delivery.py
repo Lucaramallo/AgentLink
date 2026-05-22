@@ -39,7 +39,14 @@ _FILE_HEADER_RE = re.compile(
 
 def _extract_named_files(content: str) -> list[tuple[str, str]]:
     """Return [(filename, file_content), ...] if named files are detected, else []."""
+    logger.debug(
+        "_extract_named_files: content len=%d, first 200 chars: %r",
+        len(content),
+        content[:200],
+    )
     matches = list(_FILE_HEADER_RE.finditer(content))
+    logger.debug("_extract_named_files: found %d header matches: %s",
+                 len(matches), [m.group(1) for m in matches])
     if not matches:
         return []
 
@@ -55,6 +62,8 @@ def _extract_named_files(content: str) -> list[tuple[str, str]]:
         else:
             file_content = section.strip()
         files.append((m.group(1).strip(), file_content))
+
+    logger.debug("_extract_named_files: returning %d files: %s", len(files), [f for f, _ in files])
     return files
 
 
@@ -182,8 +191,9 @@ async def deliver_to_github(
         commit_count = 0
         named_files = _extract_named_files(deliverable_content)
         if named_files:
+            # Named project files → sessions/{session_id}/project/{filename}
             deliverable_files = [
-                (f"{folder}/{filename}", file_content, author_name, f"{author_slug}@agentlink.ai")
+                (f"{folder}/project/{filename}", file_content, author_name, f"{author_slug}@agentlink.ai")
                 for filename, file_content in named_files
             ]
         else:
