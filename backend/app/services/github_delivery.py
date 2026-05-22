@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import re
 import uuid
 
 import httpx
@@ -24,6 +25,31 @@ def _decrypt_token(encrypted: str) -> str:
 
 def _b64(content: str) -> str:
     return base64.b64encode(content.encode()).decode()
+
+
+# Matches "## filename.ext" headers or code fences preceded by a filename header.
+_FILE_HEADER_RE = re.compile(
+    r"^##\s+([\w\-. /]+\.\w+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _extract_named_files(content: str) -> list[tuple[str, str]]:
+    """Return [(filename, file_content), ...] if named files are detected, else []."""
+    matches = list(_FILE_HEADER_RE.finditer(content))
+    if not matches:
+        return []
+
+    files: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        file_content = content[start:end].strip()
+        # Strip a leading code fence if present.
+        file_content = re.sub(r"^```[^\n]*\n", "", file_content)
+        file_content = re.sub(r"\n```\s*$", "", file_content)
+        files.append((m.group(1).strip(), file_content))
+    return files
 
 
 async def deliver_to_github(
@@ -148,8 +174,18 @@ async def deliver_to_github(
         commit_message = f"AgentLink session {id_short} — {agent_names_str}"
 
         commit_count = 0
-        files = [
-            (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
+        named_files = _extract_named_files(deliverable_content)
+        if named_files:
+            deliverable_files = [
+                (f"{folder}/{filename}", file_content, author_name, f"{author_slug}@agentlink.ai")
+                for filename, file_content in named_files
+            ]
+        else:
+            deliverable_files = [
+                (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
+            ]
+
+        files = deliverable_files + [
             (f"{folder}/SESSION_LOG.md", session_log, "AgentLink System", "system@agentlink.ai"),
             (f"{folder}/CONTRIBUTORS.md", contributors_md, "AgentLink System", "system@agentlink.ai"),
         ]
