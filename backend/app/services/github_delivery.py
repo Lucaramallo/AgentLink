@@ -27,44 +27,50 @@ def _b64(content: str) -> str:
     return base64.b64encode(content.encode()).decode()
 
 
-# Matches file headers in three forms:
-#   ## FILE 1: pipeline.py      (numbered)
-#   ## pipeline.py              (plain)
-#   ## **pipeline.py**          (bold)
-_FILE_HEADER_RE = re.compile(
-    r"^##\s+(?:FILE\s+\d+\s*:\s*)?\*{0,2}([\w\-. /]+\.\w+)\*{0,2}\s*$",
-    re.MULTILINE,
+# Scan for named code fences: a code block preceded by a line containing a filename.
+# Handles all header formats: ### `file.py` (FINAL), ## FILE N: file.py, ## file.py,
+# ## **file.py**, ### file.py — the filename is detected from the preceding line.
+_CODE_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+
+_FILENAME_IN_LINE_RE = re.compile(
+    r"(?:^|[\s`*(:\[])([A-Za-z0-9_\-./]+\.(?:py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md))\b",
+    re.IGNORECASE,
 )
 
 
 def _extract_named_files(content: str) -> list[tuple[str, str]]:
-    """Return [(filename, file_content), ...] if named files are detected, else []."""
+    """Return [(filename, file_content), ...] if named code blocks found, else []."""
     logger.debug(
         "_extract_named_files: content len=%d, first 200 chars: %r",
         len(content),
         content[:200],
     )
-    matches = list(_FILE_HEADER_RE.finditer(content))
-    logger.debug("_extract_named_files: found %d header matches: %s",
-                 len(matches), [m.group(1) for m in matches])
-    if not matches:
-        return []
+    files: dict[str, str] = {}
 
-    files: list[tuple[str, str]] = []
-    for i, m in enumerate(matches):
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        section = content[start:end]
-        # Extract the first fenced code block in the section; fall back to raw text.
-        fence = re.search(r"```[^\n]*\n(.*?)```", section, re.DOTALL)
-        if fence:
-            file_content = fence.group(1).rstrip("\n")
-        else:
-            file_content = section.strip()
-        files.append((m.group(1).strip(), file_content))
+    for m in _CODE_FENCE_RE.finditer(content):
+        # Find the last non-empty line before this code fence.
+        preceding_text = content[: m.start()].rstrip("\n")
+        preceding_line = ""
+        for line in reversed(preceding_text.split("\n")):
+            if line.strip():
+                preceding_line = line.strip()
+                break
 
-    logger.debug("_extract_named_files: returning %d files: %s", len(files), [f for f, _ in files])
-    return files
+        if not preceding_line:
+            continue
+
+        fn_match = _FILENAME_IN_LINE_RE.search(preceding_line)
+        if fn_match:
+            filename = fn_match.group(1)
+            files[filename] = m.group(1).rstrip("\n")  # last occurrence wins
+
+    result = list(files.items())
+    logger.debug(
+        "_extract_named_files: returning %d files: %s",
+        len(result),
+        [f for f, _ in result],
+    )
+    return result
 
 
 async def deliver_to_github(
