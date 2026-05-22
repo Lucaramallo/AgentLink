@@ -509,10 +509,14 @@ export default function SessionRoomClient() {
   const graphEdgesRef = useRef<GraphEdge[]>([]);
   const messagesRef = useRef<Message[]>([]);
   const repoTreeRef = useRef<Array<{path: string; type: string; size?: number}>>([]);
+  const repoInitializedRef = useRef(false);
+  const repoBranchRef = useRef("");
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
   useEffect(() => { graphEdgesRef.current = graphEdges; }, [graphEdges]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { repoTreeRef.current = repoTree; }, [repoTree]);
+  useEffect(() => { repoInitializedRef.current = repoInitialized; }, [repoInitialized]);
+  useEffect(() => { repoBranchRef.current = repoBranch; }, [repoBranch]);
 
   // ── Typewriter: enqueue new agent messages & drain queue ──────────────────
   useEffect(() => {
@@ -1040,8 +1044,10 @@ export default function SessionRoomClient() {
           // Restore already-initialized repo state if branch is stored in room
           if (room.repo_branch) {
             setRepoBranch(room.repo_branch);
+            repoBranchRef.current = room.repo_branch;
             setRepoBranchStrategy((room.repo_branch_strategy as "branch" | "main") ?? "branch");
             setRepoInitialized(true);
+            repoInitializedRef.current = true;
             // Fetch cached file tree (not stored in client state across refreshes)
             fetch(`${API}/rooms/${roomId}/repo/tree`)
               .then((r) => r.ok ? r.json() : null)
@@ -1295,9 +1301,11 @@ export default function SessionRoomClient() {
       if (res.ok) {
         const data = await res.json();
         setRepoBranch(data.branch ?? "");
+        repoBranchRef.current = data.branch ?? "";
         setRepoBranchUrl(data.branch_url ?? "");
         setRepoTree(data.tree_items ?? []);
         setRepoInitialized(true);
+        repoInitializedRef.current = true;
         setRepoPanelOpen(true);
       }
     } catch { /* non-blocking */ }
@@ -1322,7 +1330,7 @@ export default function SessionRoomClient() {
   }
 
   async function autoCommitToRepo(msg: Message, roundNum: number) {
-    if (!repoInitialized || !token || !sessionGithubRepo) return;
+    if (!repoInitializedRef.current || !token || !sessionGithubRepo) return;
     const agentSlug = msg.agentName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const filePath = msg.type === "DELIVERABLE"
       ? `sessions/${roomId}/deliverable.md`
@@ -1560,13 +1568,17 @@ export default function SessionRoomClient() {
                 setRepoTree(items);
                 repoTreeRef.current = items;
               }
+              if (treeData.branch && !repoBranchRef.current) {
+                setRepoBranch(treeData.branch);
+                repoBranchRef.current = treeData.branch;
+              }
             }
           } catch { /* non-blocking */ }
         }
 
         const currentTree = repoTreeRef.current;
         const repoCtxStr = currentTree.length > 0
-          ? `--- GITHUB REPOSITORY CONTEXT ---\nRepository: ${sessionGithubRepo}\nWorking branch: ${repoBranch}\n\nYou have read access to this repository. Below is the file tree.\nReference files by path if relevant.\nFile tree:\n${
+          ? `--- GITHUB REPOSITORY CONTEXT ---\nRepository: ${sessionGithubRepo}\nWorking branch: ${repoBranchRef.current}\n\nYou have read access to this repository. Below is the file tree.\nReference files by path if relevant.\nFile tree:\n${
               currentTree.slice(0, 200).map((i) => i.path).join("\n")
             }${currentTree.length > 200 ? `\n...and ${currentTree.length - 200} more files` : ""}`
           : undefined;
@@ -1857,7 +1869,7 @@ export default function SessionRoomClient() {
       markThinking(coord, 1);
       const msg = await callAgent(coord, r1Prompt, getVisibleContext(coord, sessionMessages, "R1"), "R1", undefined, 1, maxRounds);
       markDone(coord, msg, 1);
-      if (msg) r1CoordMsgs.push(msg);
+      if (msg) { r1CoordMsgs.push(msg); void autoCommitToRepo(msg, 1); }
     }
 
     // Workers (contributors + builders) in parallel, reviewers after
@@ -1870,6 +1882,7 @@ export default function SessionRoomClient() {
         const subtask = plan?.assignments.find((a) => a.agent_id === agent.id || a.agent_name === agent.label)?.subtask;
         const msg = await callAgent(agent, r1Prompt, getVisibleContext(agent, r1WorkerContext, "R1"), "R1", subtask, 1, maxRounds);
         markDone(agent, msg, 1);
+        if (msg) void autoCommitToRepo(msg, 1);
         return msg;
       }),
     );
@@ -1881,7 +1894,7 @@ export default function SessionRoomClient() {
       markThinking(rev, 1);
       const msg = await callAgent(rev, r1Prompt, getVisibleContext(rev, [...r1ReviewerBase, ...r1ReviewerMsgs], "R1"), "R1", undefined, 1, maxRounds);
       markDone(rev, msg, 1);
-      if (msg) r1ReviewerMsgs.push(msg);
+      if (msg) { r1ReviewerMsgs.push(msg); void autoCommitToRepo(msg, 1); }
     }
 
     const r1Messages = [...r1CoordMsgs, ...r1WorkerMsgs, ...r1ReviewerMsgs];
@@ -1904,13 +1917,13 @@ export default function SessionRoomClient() {
         markThinking(coord, round);
         const msg = await callAgent(coord, roundPrompt, getVisibleContext(coord, [...allMessages, ...roundMsgs], `R${round}`), "R2", undefined, round, maxRounds);
         markDone(coord, msg, round);
-        if (msg) roundMsgs.push(msg);
+        if (msg) { roundMsgs.push(msg); void autoCommitToRepo(msg, round); }
       }
       for (const agent of agents) {
         markThinking(agent, round);
         const msg = await callAgent(agent, roundPrompt, getVisibleContext(agent, [...allMessages, ...roundMsgs], `R${round}`), "R2", undefined, round, maxRounds);
         markDone(agent, msg, round);
-        if (msg) roundMsgs.push(msg);
+        if (msg) { roundMsgs.push(msg); void autoCommitToRepo(msg, round); }
       }
       roundsCompletedRef.current = round;
       allMessages = [...allMessages, ...roundMsgs];
@@ -1982,7 +1995,7 @@ export default function SessionRoomClient() {
           maxRounds,
         );
         markDone(agent, msg, maxRounds);
-        if (msg) finalRoundMsgs.push(msg);
+        if (msg) { finalRoundMsgs.push(msg); void autoCommitToRepo(msg, maxRounds); }
       }
       // Build rn_context for Builder
       const rnContext = finalRoundMsgs

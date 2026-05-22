@@ -1137,7 +1137,7 @@ async def commit_to_repo(
                 "id": str(sys_msg.message_id),
                 "agentId": str(sys_msg.sender_agent_id),
                 "agentName": agent_name,
-                "agentOrg": agent_role,
+                "agentOrg": "AgentLink",
                 "role": "Observer",
                 "type": "SYSTEM",
                 "content": event_text,
