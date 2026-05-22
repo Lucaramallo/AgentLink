@@ -362,6 +362,7 @@ export default function SessionRoomClient() {
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [failedAgent, setFailedAgent]           = useState<{ id: string; name: string } | null>(null);
   const [droppedAgentIds, setDroppedAgentIds]   = useState<Set<string>>(new Set());
+  const pendingRetryRef                         = useRef<(() => Promise<void>) | null>(null);
 
   // Rating flow (shown before CloseModal after CONFORME)
   const [showRatingScreen, setShowRatingScreen]   = useState(false);
@@ -1600,6 +1601,10 @@ export default function SessionRoomClient() {
         // Agent webhook failure — show recovery modal
         if (data.error === "agent_unavailable") {
           setFailedAgent({ id: agent.id, name: data.agent_name ?? agent.label });
+          pendingRetryRef.current = async () => {
+            const retryMsg = await callAgent(agent, prompt, context, type, subtask, roundNum, maxRnds, rnCtx);
+            if (!retryMsg) setShowFailureModal(true);
+          };
           setShowFailureModal(true);
           return null;
         }
@@ -2179,6 +2184,14 @@ export default function SessionRoomClient() {
     setOutcome("INCOMPLETE");
     setShowProposePoll(false);
     setShowFeedbackModal(true);
+  }
+
+  async function handleRetry() {
+    const retryCb = pendingRetryRef.current;
+    pendingRetryRef.current = null;
+    setShowFailureModal(false);
+    setFailedAgent(null);
+    if (retryCb) await retryCb();
   }
 
   function handleCancelSession() {
@@ -3535,6 +3548,7 @@ export default function SessionRoomClient() {
       {showFailureModal && failedAgent && (
         <AgentFailureModal
           agentName={failedAgent.name}
+          onRetry={handleRetry}
           onContinueWithout={handleContinueWithout}
           onCloseSession={handleCloseSessionDueToFailure}
         />
@@ -4257,10 +4271,12 @@ function RatingModal({
 
 function AgentFailureModal({
   agentName,
+  onRetry,
   onContinueWithout,
   onCloseSession,
 }: {
   agentName: string;
+  onRetry: () => void;
   onContinueWithout: () => void;
   onCloseSession: () => void;
 }) {
@@ -4288,11 +4304,22 @@ function AgentFailureModal({
 
         <div className="flex flex-col gap-3">
           <button
+            onClick={onRetry}
+            className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all"
+            style={{
+              background: "rgba(78,205,196,0.18)",
+              border: "1px solid rgba(78,205,196,0.6)",
+              color: "#4ECDC4",
+            }}
+          >
+            Retry
+          </button>
+          <button
             onClick={onContinueWithout}
             className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all"
             style={{
-              background: "rgba(78,205,196,0.12)",
-              border: "1px solid rgba(78,205,196,0.4)",
+              background: "rgba(78,205,196,0.08)",
+              border: "1px solid rgba(78,205,196,0.25)",
               color: "#4ECDC4",
             }}
           >
