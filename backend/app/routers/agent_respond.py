@@ -122,6 +122,10 @@ async def agent_respond(
     # Normalise agent_id: strip the 'node-' prefix the session graph adds so the
     # UUID check below works even when the caller passes the full node_id.
     raw_agent_id = _strip_node_prefix(payload.agent_id)
+    # Registered name from DB record; set when a DB agent falls through to the
+    # built-in demo path so agent_name in the response always comes from the
+    # agent record rather than whatever the demo-agent alias lookup returns.
+    registered_agent_name: str | None = None
 
     try:
         # ── Try DB agent first (external agents with webhook_url) ──────────
@@ -190,9 +194,15 @@ async def agent_respond(
                             "message": "External agents must have a webhook URL configured",
                         },
                     )
+                # Record the registered name so the response uses it, not the
+                # demo fallback alias.  Also drives persona selection below.
+                registered_agent_name = db_agent.name
 
         # ── Fall through to built-in demo agents ───────────────────────────
-        agent_id = _normalize_agent_id(raw_agent_id)
+        # Normalise using the registered DB name when available so the right
+        # built-in persona is selected (e.g. "Nexus-7" → "nexus-7", not the
+        # UUID which would default to "quant-z").
+        agent_id = _normalize_agent_id(registered_agent_name or raw_agent_id)
         if agent_id not in AGENTS:
             return JSONResponse(
                 status_code=400,
@@ -250,7 +260,7 @@ async def agent_respond(
         return DemoResponse(
             response=text,
             agent_id=agent_id,
-            agent_name=agent["name"],
+            agent_name=registered_agent_name or agent["name"],
             messages_remaining=_MAX_MESSAGES - new_count,
         )
     finally:
