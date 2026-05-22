@@ -137,6 +137,7 @@ export default function AdminClient() {
   const [registerOauthLoading, setRegisterOauthLoading] = useState(false);
 
   const pendingRegisterRef = useRef(false);
+  const githubSettingsOauthPendingRef = useRef(false);
   const submitRegisterAgentRef = useRef<() => Promise<void>>(async () => {});
   const registerFormRef = useRef(registerForm);
 
@@ -197,6 +198,7 @@ export default function AdminClient() {
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === "github-oauth-success") {
         if (e.data.token && e.data.user) login(e.data.token as string, e.data.user);
+        githubSettingsOauthPendingRef.current = false;
         setGithubOauthLoading(false);
         setGithubOauthError(null);
         if (pendingRegisterRef.current) {
@@ -211,6 +213,7 @@ export default function AdminClient() {
           });
         }
       } else if (e.data?.type === "github-oauth-error") {
+        githubSettingsOauthPendingRef.current = false;
         setGithubOauthError((e.data.error as string | undefined) ?? "OAuth failed.");
         setGithubOauthLoading(false);
         if (pendingRegisterRef.current) {
@@ -298,14 +301,36 @@ export default function AdminClient() {
   }
 
   async function connectGithubPopup() {
+    githubSettingsOauthPendingRef.current = true;
     setGithubOauthLoading(true);
     setGithubOauthError(null);
+    // Open the popup synchronously before any await so browsers allow it.
+    const popup = window.open("", "github-oauth", "width=600,height=700,left=300,top=100");
     try {
       const url = await fetchGithubOAuthUrl();
       if (!url) throw new Error("Could not start GitHub OAuth.");
-      const popup = window.open(url, "github-oauth", "width=600,height=700,left=300,top=100");
-      if (!popup) throw new Error("Popup blocked. Allow popups for this site and try again.");
+      if (popup) {
+        popup.location.href = url;
+        // Poll for popup close. If it closes before the postMessage arrives
+        // (user dismissed it), release the stuck "Connecting…" state after a grace period.
+        const pollId = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(pollId);
+            setTimeout(() => {
+              if (githubSettingsOauthPendingRef.current) {
+                githubSettingsOauthPendingRef.current = false;
+                setGithubOauthLoading(false);
+                setGithubOauthError("GitHub connection was not completed. Please try again.");
+              }
+            }, 600);
+          }
+        }, 400);
+      } else {
+        throw new Error("Popup blocked. Allow popups for this site and try again.");
+      }
     } catch (err) {
+      if (popup) popup.close();
+      githubSettingsOauthPendingRef.current = false;
       setGithubOauthError(err instanceof Error ? err.message : "OAuth failed.");
       setGithubOauthLoading(false);
     }

@@ -450,6 +450,7 @@ export default function SessionRoomClient() {
   const [repoBranchUrl, setRepoBranchUrl] = useState("");
   const [repoBranchStrategy, setRepoBranchStrategy] = useState<"branch" | "main">("branch");
   const [repoTree, setRepoTree] = useState<Array<{path: string; type: string; size?: number}>>([]);
+  const [newlyCommittedFiles, setNewlyCommittedFiles] = useState<Set<string>>(new Set());
   const [repoPanelOpen, setRepoPanelOpen] = useState(false);
   const [repoFileContent, setRepoFileContent] = useState<{path: string; content: string} | null>(null);
   const [repoFileLoading, setRepoFileLoading] = useState(false);
@@ -512,10 +513,12 @@ export default function SessionRoomClient() {
   const repoTreeRef = useRef<Array<{path: string; type: string; size?: number}>>([]);
   const repoInitializedRef = useRef(false);
   const repoBranchRef = useRef("");
+  const tokenRef = useRef<string | null | undefined>(null);
   useEffect(() => { graphNodesRef.current = graphNodes; }, [graphNodes]);
   useEffect(() => { graphEdgesRef.current = graphEdges; }, [graphEdges]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { repoTreeRef.current = repoTree; }, [repoTree]);
+  useEffect(() => { tokenRef.current = token; }, [token]);
   useEffect(() => { repoInitializedRef.current = repoInitialized; }, [repoInitialized]);
   useEffect(() => { repoBranchRef.current = repoBranch; }, [repoBranch]);
 
@@ -1178,6 +1181,30 @@ export default function SessionRoomClient() {
           // so no need to inject a message here — just update branch state if needed.
           const cd = data.data ?? {};
           if (cd.branch && !repoBranch) setRepoBranch(cd.branch);
+          // Re-fetch the repo tree and animate newly committed files.
+          fetch(`${API}/rooms/${roomId}/repo/tree`, {
+            ...(tokenRef.current ? { headers: { Authorization: `Bearer ${tokenRef.current}` } } : {}),
+          })
+            .then((r) => r.ok ? r.json() : null)
+            .then((treeData) => {
+              if (!treeData?.items?.length) return;
+              const newItems = treeData.items as Array<{path: string; type: string; size?: number}>;
+              const currentPaths = new Set(repoTreeRef.current.map((i) => i.path));
+              const addedPaths = newItems.map((i) => i.path).filter((p) => !currentPaths.has(p));
+              setRepoTree(newItems);
+              repoTreeRef.current = newItems;
+              if (addedPaths.length > 0) {
+                setNewlyCommittedFiles((prev) => new Set([...prev, ...addedPaths]));
+                setTimeout(() => {
+                  setNewlyCommittedFiles((prev) => {
+                    const next = new Set(prev);
+                    addedPaths.forEach((p) => next.delete(p));
+                    return next;
+                  });
+                }, 3000);
+              }
+            })
+            .catch(() => {});
         }
       } catch { /* ignore malformed frames */ }
     };
@@ -2776,32 +2803,41 @@ export default function SessionRoomClient() {
                 {repoTree.length === 0 && !repoFileLoading && (
                   <div className="px-3 py-4 text-[10px] text-al-muted text-center">No files indexed.</div>
                 )}
-                {repoTree.map((item) => (
-                  <button
-                    key={item.path}
-                    onClick={() => item.type === "blob" ? openRepoFile(item.path) : undefined}
-                    disabled={item.type !== "blob"}
-                    className="w-full flex items-center gap-1.5 px-3 py-1 text-left hover:bg-al-bg transition-colors disabled:cursor-default"
-                  >
-                    <span className="shrink-0 text-[10px]" style={{ color: item.type === "tree" ? "#F59E0B" : "#64748B" }}>
-                      {item.type === "tree" ? "📁" : "📄"}
-                    </span>
-                    <span
-                      className="font-mono text-[9px] truncate"
+                {repoTree.map((item) => {
+                  const isNew = newlyCommittedFiles.has(item.path);
+                  return (
+                    <button
+                      key={item.path}
+                      onClick={() => item.type === "blob" ? openRepoFile(item.path) : undefined}
+                      disabled={item.type !== "blob"}
+                      className="w-full flex items-center gap-1.5 px-3 py-1 text-left disabled:cursor-default"
                       style={{
-                        paddingLeft: `${(item.path.split("/").length - 1) * 8}px`,
-                        color: item.type === "blob" ? "#94A3B8" : "#CBD5E1",
+                        transition: "background-color 1s ease",
+                        backgroundColor: isNew ? "rgba(78,205,196,0.10)" : undefined,
+                        animation: isNew ? "al-new-file-fadein 0.4s ease forwards" : undefined,
                       }}
                     >
-                      {item.path.split("/").pop()}
-                    </span>
-                    {item.size != null && item.size > 0 && (
-                      <span className="shrink-0 text-[8px] text-al-muted ml-auto">
-                        {item.size > 1024 ? `${(item.size / 1024).toFixed(0)}k` : `${item.size}b`}
+                      <span className="shrink-0 text-[10px]" style={{ color: item.type === "tree" ? "#F59E0B" : isNew ? "#4ECDC4" : "#64748B" }}>
+                        {item.type === "tree" ? "📁" : "📄"}
                       </span>
-                    )}
-                  </button>
-                ))}
+                      <span
+                        className="font-mono text-[9px] truncate"
+                        style={{
+                          paddingLeft: `${(item.path.split("/").length - 1) * 8}px`,
+                          color: isNew ? "#4ECDC4" : item.type === "blob" ? "#94A3B8" : "#CBD5E1",
+                          fontWeight: isNew ? 600 : undefined,
+                        }}
+                      >
+                        {item.path.split("/").pop()}
+                      </span>
+                      {item.size != null && item.size > 0 && (
+                        <span className="shrink-0 text-[8px] text-al-muted ml-auto">
+                          {item.size > 1024 ? `${(item.size / 1024).toFixed(0)}k` : `${item.size}b`}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

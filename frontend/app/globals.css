@@ -28,3 +28,8 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+
+@keyframes al-new-file-fadein {
+  from { opacity: 0; background-color: rgba(78, 205, 196, 0.18); }
+  to   { opacity: 1; background-color: rgba(78, 205, 196, 0.10); }
+}

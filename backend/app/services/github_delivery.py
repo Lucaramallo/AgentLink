@@ -27,9 +27,12 @@ def _b64(content: str) -> str:
     return base64.b64encode(content.encode()).decode()
 
 
-# Matches "## filename.ext" headers or code fences preceded by a filename header.
+# Matches file headers in three forms:
+#   ## FILE 1: pipeline.py      (numbered)
+#   ## pipeline.py              (plain)
+#   ## **pipeline.py**          (bold)
 _FILE_HEADER_RE = re.compile(
-    r"^##\s+([\w\-. /]+\.\w+)\s*$",
+    r"^##\s+(?:FILE\s+\d+\s*:\s*)?\*{0,2}([\w\-. /]+\.\w+)\*{0,2}\s*$",
     re.MULTILINE,
 )
 
@@ -44,10 +47,13 @@ def _extract_named_files(content: str) -> list[tuple[str, str]]:
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        file_content = content[start:end].strip()
-        # Strip a leading code fence if present.
-        file_content = re.sub(r"^```[^\n]*\n", "", file_content)
-        file_content = re.sub(r"\n```\s*$", "", file_content)
+        section = content[start:end]
+        # Extract the first fenced code block in the section; fall back to raw text.
+        fence = re.search(r"```[^\n]*\n(.*?)```", section, re.DOTALL)
+        if fence:
+            file_content = fence.group(1).rstrip("\n")
+        else:
+            file_content = section.strip()
         files.append((m.group(1).strip(), file_content))
     return files
 
