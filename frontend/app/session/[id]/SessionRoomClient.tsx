@@ -1592,7 +1592,12 @@ export default function SessionRoomClient() {
 
         if (res.status === 429) {
           const body = await res.json().catch(() => ({}));
-          if (body.error === "demo_limit_reached") setDemoLimitReached(true);
+          if (body.error === "demo_limit_reached") {
+            setDemoLimitReached(true);
+            addSystemMsg(`${agent.label} was skipped — demo message limit reached for this session.`);
+          } else {
+            addSystemMsg(`${agent.label} was rate-limited and skipped for this round.`);
+          }
           return null;
         }
 
@@ -1609,12 +1614,31 @@ export default function SessionRoomClient() {
           return null;
         }
 
-        if (!res.ok) return null;
+        if (!res.ok) {
+          // 400 errors are configuration problems (e.g. no webhook) — not retryable, post system message.
+          // 5xx and other errors are potentially transient — show the recovery modal.
+          const reason = data?.message ?? data?.detail ?? `HTTP ${res.status}`;
+          if (res.status >= 400 && res.status < 500) {
+            addSystemMsg(`${agent.label} could not respond and was skipped: ${reason}`);
+          } else {
+            addSystemMsg(`${agent.label} encountered a server error and was skipped for this round.`);
+            setFailedAgent({ id: agent.id, name: data?.agent_name ?? agent.label });
+            pendingRetryRef.current = async () => {
+              const retryMsg = await callAgent(agent, prompt, context, type, subtask, roundNum, maxRnds, rnCtx);
+              if (!retryMsg) setShowFailureModal(true);
+            };
+            setShowFailureModal(true);
+          }
+          return null;
+        }
 
         if (data.messages_remaining != null) setMessagesRemaining(data.messages_remaining);
 
         const content: string = data.response ?? data.message ?? data.content ?? "";
-        if (!content) return null;
+        if (!content) {
+          addSystemMsg(`${agent.label} responded with no content and was skipped for this round.`);
+          return null;
+        }
 
         const agentMsg: Message = {
           id: `demo-${type}-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1630,6 +1654,7 @@ export default function SessionRoomClient() {
         setMessages((prev) => [...prev, agentMsg]);
         return agentMsg;
       } catch {
+        addSystemMsg(`${agent.label} encountered a connection error and was skipped for this round.`);
         return null;
       }
     }
