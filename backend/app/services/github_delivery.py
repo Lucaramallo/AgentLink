@@ -40,7 +40,7 @@ _FILENAME_IN_LINE_RE = re.compile(
 
 def _extract_named_files(content: str) -> list[tuple[str, str]]:
     """Return [(filename, file_content), ...] if named code blocks found, else []."""
-    logger.debug(
+    logger.info(
         "_extract_named_files: content len=%d, first 200 chars: %r",
         len(content),
         content[:200],
@@ -65,7 +65,7 @@ def _extract_named_files(content: str) -> list[tuple[str, str]]:
             files[filename] = m.group(1).rstrip("\n")  # last occurrence wins
 
     result = list(files.items())
-    logger.debug(
+    logger.info(
         "_extract_named_files: returning %d files: %s",
         len(result),
         [f for f, _ in result],
@@ -96,10 +96,21 @@ async def deliver_to_github(
     }
 
     logger.info(
-        "github_delivery: using token prefix=%s... username=%s repo=%s",
-        token[:6] if token else "EMPTY",
+        "github_delivery: room=%s username=%s repo=%s token_prefix=%s...",
+        room_id,
         github_username,
         existing_repo_url,
+        token[:6] if token else "EMPTY",
+    )
+    logger.info(
+        "deliver_to_github: deliverable first 200 chars: %r",
+        deliverable_content[:200],
+    )
+    named_files = _extract_named_files(deliverable_content)
+    logger.info(
+        "deliver_to_github: named_files found=%d: %s",
+        len(named_files),
+        [f for f, _ in named_files],
     )
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -195,16 +206,15 @@ async def deliver_to_github(
         commit_message = f"AgentLink session {id_short} — {agent_names_str}"
 
         commit_count = 0
-        named_files = _extract_named_files(deliverable_content)
+        # Always commit DELIVERABLE.md with the full content as-is.
+        deliverable_files: list[tuple[str, str, str, str]] = [
+            (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
+        ]
         if named_files:
-            # Named project files → sessions/{session_id}/project/{filename}
-            deliverable_files = [
+            # Also commit each extracted project file into project/.
+            deliverable_files += [
                 (f"{folder}/project/{filename}", file_content, author_name, f"{author_slug}@agentlink.ai")
                 for filename, file_content in named_files
-            ]
-        else:
-            deliverable_files = [
-                (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
             ]
 
         files = deliverable_files + [

@@ -213,9 +213,15 @@ async def commit_file(
             headers=hdrs,
             params={"ref": branch},
         )
+        if check.status_code == 404:
+            return None  # file doesn't exist yet — PUT without SHA creates it
         if check.status_code == 200:
             return check.json().get("sha")
-        return None
+        logger.error(
+            "GitHub GET /contents unexpected: status=%d path=%s branch=%s body=%s",
+            check.status_code, file_path, branch, check.text,
+        )
+        raise ValueError(f"GitHub error checking file: {check.status_code}")
 
     async with httpx.AsyncClient(timeout=30) as client:
         existing_sha = await _get_sha(client)
@@ -241,6 +247,10 @@ async def commit_file(
             resp = await client.put(f"{api_base}/contents/{file_path}", headers=hdrs, json=body)
 
         if resp.status_code not in (200, 201):
+            logger.error(
+                "GitHub PUT /contents failed: status=%d path=%s branch=%s body=%s",
+                resp.status_code, file_path, branch, resp.text,
+            )
             raise ValueError(f"Commit failed: {resp.status_code} — {resp.text[:200]}")
 
         commit_sha: str = resp.json().get("commit", {}).get("sha", "")

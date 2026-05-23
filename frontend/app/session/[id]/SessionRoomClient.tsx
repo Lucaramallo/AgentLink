@@ -1370,9 +1370,7 @@ export default function SessionRoomClient() {
   async function autoCommitToRepo(msg: Message, roundNum: number) {
     if (!repoInitializedRef.current || !token || !sessionGithubRepo) return;
     const agentSlug = msg.agentName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const filePath = msg.type === "DELIVERABLE"
-      ? `sessions/${roomId}/deliverable.md`
-      : `sessions/${roomId}/contributions/${agentSlug}.md`;
+    const filePath = `sessions/${roomId}/contributions/${agentSlug}.md`;
     const commitMessage = `[${msg.agentName}] (${msg.role}): Round ${roundNum} output`;
     try {
       await fetch(`${API}/rooms/${roomId}/repo/commit`, {
