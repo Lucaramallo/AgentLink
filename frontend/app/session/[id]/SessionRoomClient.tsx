@@ -2601,6 +2601,83 @@ export default function SessionRoomClient() {
     URL.revokeObjectURL(url);
   }
 
+  async function downloadZip() {
+    // Load JSZip from CDN if not already present
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!(window as any).JSZip) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("Failed to load JSZip"));
+        document.head.appendChild(s);
+      });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const JSZipCtor = (window as any).JSZip as new () => {
+      file: (name: string, data: string) => void;
+      generateAsync: (opts: { type: string }) => Promise<Blob>;
+    };
+    const zip = new JSZipCtor();
+
+    // Extract named files from all DELIVERABLE messages (mirrors backend _extract_named_files)
+    const allDeliverableContent = messages
+      .filter((m) => m.type === "DELIVERABLE")
+      .map((m) => m.content)
+      .join("\n\n---\n\n");
+
+    const CODE_FENCE_RE = /```[^\n]*\n([\s\S]*?)```/g;
+    const FILENAME_IN_LINE_RE = /(?:^|[\s`*(:\[])([A-Za-z0-9_\-.\/]+\.(?:py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md))\b/i;
+    const namedFiles: Record<string, string> = {};
+    let fm: RegExpExecArray | null;
+    while ((fm = CODE_FENCE_RE.exec(allDeliverableContent)) !== null) {
+      const preceding = allDeliverableContent.slice(0, fm.index).trimEnd();
+      let precedingLine = "";
+      for (const line of preceding.split("\n").reverse()) {
+        if (line.trim()) { precedingLine = line.trim(); break; }
+      }
+      if (!precedingLine) continue;
+      const fnm = FILENAME_IN_LINE_RE.exec(precedingLine);
+      if (fnm) namedFiles[fnm[1]] = fm[1].replace(/\n$/, "");
+    }
+    for (const [filename, content] of Object.entries(namedFiles)) {
+      zip.file(`project/${filename}`, content);
+    }
+
+    // Contributions per agent — one file per agent, all round messages concatenated
+    const agentContribs: Record<string, string[]> = {};
+    for (const msg of messages) {
+      if (msg.isHuman || msg.agentId === "system" || !msg.agentName) continue;
+      (agentContribs[msg.agentName] ??= []).push(msg.content);
+    }
+    for (const [name, contribs] of Object.entries(agentContribs)) {
+      zip.file(`contributions/${name}.md`, contribs.join("\n\n---\n\n"));
+    }
+
+    // DELIVERABLE.md
+    zip.file("DELIVERABLE.md", allDeliverableContent);
+
+    // CONTRIBUTORS.md — markdown table of team composition
+    const tableRows = graphNodes
+      .map((n) => `| ${n.label} | ${n.role} | ${n.isHuman ? "Yes" : "No"} |`)
+      .join("\n");
+    zip.file(
+      "CONTRIBUTORS.md",
+      ["# Contributors", "", "| Name | Role | Human |", "|------|------|-------|", tableRows].join("\n"),
+    );
+
+    // SESSION_LOG.json — full messages array
+    zip.file("SESSION_LOG.json", JSON.stringify(messages, null, 2));
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `agentlink-session-${roomId}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   const isClosed         = status === "CLOSED_SUCCESS" || status === "CLOSED_DISPUTED";
@@ -3025,7 +3102,7 @@ export default function SessionRoomClient() {
                   displayContent={displayContent}
                   isTyping={isCurrentlyTyping}
                   useMarkdown={isRevealed}
-                  onDownloadDeliverable={msg.type === "DELIVERABLE" && isRevealed ? downloadDeliverable : undefined}
+                  onDownloadDeliverable={msg.type === "DELIVERABLE" && isRevealed ? downloadZip : undefined}
                 />
               );
             })}
@@ -3678,6 +3755,7 @@ export default function SessionRoomClient() {
           githubPushTimedOut={githubPushTimedOut}
           githubDeliveryUrl={githubDeliveryUrl}
           onDownloadDeliverable={deliverableMsg ? downloadDeliverable : undefined}
+          onDownloadZip={() => { void downloadZip(); }}
           onPushGitHub={deliverableMsg && outcome === "SUCCESS" && !!user?.github_username && !githubConnectionFailed && !!sessionGithubRepo ? () => pushToGitHub() : undefined}
           onSaveAndRetryGitHub={deliverableMsg && outcome === "SUCCESS" ? saveGithubRepoAndRetry : undefined}
           githubPushError={githubPushError}
@@ -4075,9 +4153,7 @@ function MessageBubble({
             <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 20 20" stroke="currentColor">
               <path strokeLinecap="round" strokeWidth={1.5} d="M10 3v10m0 0l-3.5-3.5M10 13l3.5-3.5M3 17h14" />
             </svg>
-            <span>
-              Download deliverable · <span className="opacity-70">AgentLink_Deliverable_{roomId}.{deliverableExt}</span>
-            </span>
+            <span>Download complete project (.zip)</span>
           </button>
         )}
         <div className="text-[10px] text-al-muted mt-1">
@@ -4451,6 +4527,7 @@ function CloseModal({
   githubDeliveryUrl,
   githubPushError,
   onDownloadDeliverable,
+  onDownloadZip,
   onPushGitHub,
   onSaveAndRetryGitHub,
   onGithubOAuthSuccess,
@@ -4484,6 +4561,7 @@ function CloseModal({
   githubDeliveryUrl?: string | null;
   githubPushError?: string | null;
   onDownloadDeliverable?: (msg: Message) => void;
+  onDownloadZip: () => void;
   onPushGitHub?: () => void;
   onSaveAndRetryGitHub?: (url: string) => Promise<void>;
   onGithubOAuthSuccess?: () => void;
@@ -4752,6 +4830,20 @@ function CloseModal({
 
         {/* Actions */}
         <div className="flex flex-col gap-2.5">
+          <button
+            onClick={onDownloadZip}
+            className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+            style={{
+              background: "rgba(78,205,196,0.12)",
+              border: "1px solid rgba(78,205,196,0.45)",
+              color: "#4ECDC4",
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 16 16" stroke="currentColor">
+              <path strokeLinecap="round" strokeWidth={1.5} d="M8 2v8m0 0L5 7m3 3l3-3M2 13h12" />
+            </svg>
+            Download complete project (.zip)
+          </button>
           {deliverable && onDownloadDeliverable && (
             <button
               onClick={() => onDownloadDeliverable(deliverable)}
@@ -4804,7 +4896,7 @@ function CloseModal({
                   <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.38.6.1.82-.26.82-.58v-2.17c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02.005 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
                 </svg>
               )}
-              {githubPushTimedOut ? "Retry — Push to GitHub" : githubPushing ? "Pushing to GitHub…" : oauthConnected ? "GitHub connected — click to push" : "Push to GitHub"}
+              {githubPushTimedOut ? "Retry — Push complete project to GitHub" : githubPushing ? "Pushing to GitHub…" : oauthConnected ? "GitHub connected — click to push" : "Push complete project to GitHub"}
             </button>
           )}
           {/* Step 2: GitHub connected but no repo URL — enter repo to push */}
