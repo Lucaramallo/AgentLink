@@ -3769,6 +3769,7 @@ export default function SessionRoomClient() {
           onMergeToMain={mergeToMain}
           onDownload={downloadLog}
           onClose={() => setShowModal(false)}
+          onContinueSession={() => { router.push(`/session/build?continue_from=${roomId}`); }}
         />
       )}
     </div>
@@ -4540,6 +4541,7 @@ function CloseModal({
   onMergeToMain,
   onDownload,
   onClose,
+  onContinueSession,
 }: {
   outcome: "SUCCESS" | "DISPUTED" | "INCOMPLETE" | "CANCELLED";
   roomId: string;
@@ -4574,6 +4576,7 @@ function CloseModal({
   onMergeToMain?: () => void;
   onDownload: () => void;
   onClose: () => void;
+  onContinueSession?: () => void;
 }) {
   const { login } = useAuth();
   const [inlineRepo, setInlineRepo] = useState("");
@@ -5003,6 +5006,15 @@ function CloseModal({
             <div className="px-3 py-2 rounded-lg bg-green-500/10 border border-green-500/30">
               <p className="text-xs text-green-400">Branch merged to main successfully.</p>
             </div>
+          )}
+          {onContinueSession && (
+            <button
+              onClick={onContinueSession}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+              style={{ background: "rgba(78,205,196,0.12)", border: "1px solid rgba(78,205,196,0.5)", color: "#4ECDC4" }}
+            >
+              ↻ Continue this session →
+            </button>
           )}
           <div className="flex gap-3">
             <button

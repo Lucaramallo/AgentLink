@@ -148,6 +148,10 @@ class Room(Base):
     )
     # ALC held in escrow from session open until settlement.
     escrowed_alc: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # ID of the previous session this one continues from (for context injection).
+    continue_from_room_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, default=None
+    )
 
     # Relaciones
     contract: Mapped["RoomContract"] = relationship("RoomContract", back_populates="room")

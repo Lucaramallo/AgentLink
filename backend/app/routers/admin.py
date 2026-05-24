@@ -8,12 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.middleware.auth import get_current_superadmin, get_current_user
 from app.models.agent import Agent, HumanOwner
 from app.models.reputation import FeedbackRelational, FeedbackTechnical
-from app.models.room import Room, RoomOutcome, RoomStatus
+from app.models.room import Message, MessageType, Room, RoomOutcome, RoomStatus
 from app.models.user import User, UserRole
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -92,6 +93,21 @@ class GlobalStatsOut(BaseModel):
     total_owners: int
     avg_tech_reputation: float | None
     avg_rel_reputation: float | None
+
+
+class SessionDetailOut(BaseModel):
+    room_id: uuid.UUID
+    status: str
+    outcome: str | None
+    created_at: str
+    closed_at: str | None
+    session_graph: dict | None
+    github_repo_url: str | None
+    repo_branch: str | None
+    deliverable_content: str | None
+    messages: list[dict]
+
+    model_config = {"from_attributes": True}
 
 
 class MyStatsOut(BaseModel):
@@ -196,6 +212,63 @@ async def my_sessions(
         .order_by(Room.created_at.desc())
     )
     return [_session_out(r) for r in result.scalars().all()]
+
+
+@router.get("/my-sessions/{room_id}", response_model=SessionDetailOut)
+async def my_session_detail(
+    room_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SessionDetailOut:
+    """Full detail for a single session the user has access to."""
+    result = await db.execute(
+        select(Room)
+        .options(selectinload(Room.messages))
+        .where(Room.room_id == room_id)
+    )
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    # Verify access: requester or owner of a participating agent
+    owned_agent_ids = (await db.execute(
+        select(Agent.agent_id).where(Agent.user_id == current_user.id)
+    )).scalars().all()
+    is_requester = room.requester_user_id == current_user.id
+    is_agent_owner = room.agent_a_id in owned_agent_ids or room.agent_b_id in owned_agent_ids
+    if not is_requester and not is_agent_owner:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    # Extract deliverable content (most recent DELIVERABLE messages)
+    deliverable_msgs = [m for m in room.messages if m.message_type == MessageType.DELIVERABLE]
+    deliverable_content: str | None = None
+    if deliverable_msgs:
+        deliverable_content = "\n\n---\n\n".join(m.content_natural for m in deliverable_msgs)
+
+    # Serialize all messages for SESSION_LOG download
+    serialized_messages = [
+        {
+            "message_id": str(m.message_id),
+            "sender_agent_id": str(m.sender_agent_id),
+            "content_natural": m.content_natural,
+            "message_type": m.message_type.value,
+            "timestamp": m.timestamp.isoformat() if m.timestamp else None,
+        }
+        for m in room.messages
+    ]
+
+    return SessionDetailOut(
+        room_id=room.room_id,
+        status=room.status.value,
+        outcome=room.outcome.value if room.outcome else None,
+        created_at=room.created_at.isoformat(),
+        closed_at=room.closed_at.isoformat() if room.closed_at else None,
+        session_graph=room.session_graph,
+        github_repo_url=room.github_repo_url,
+        repo_branch=room.repo_branch,
+        deliverable_content=deliverable_content,
+        messages=serialized_messages,
+    )
 
 
 @router.get("/my-stats", response_model=MyStatsOut)

@@ -136,6 +136,38 @@ export interface AdminSession {
   closed_at: string | null;
 }
 
+export interface SessionDetailAgent {
+  id: string;
+  name: string;
+  role: string;
+  is_human?: boolean;
+  is_builder?: boolean;
+  clusterId?: string | null;
+}
+
+export interface SessionDetail {
+  room_id: string;
+  status: string;
+  outcome: string | null;
+  created_at: string;
+  closed_at: string | null;
+  session_graph: {
+    agents: SessionDetailAgent[];
+    edges: Array<{ from: string; to: string }>;
+    clusters: Array<{ id: string; name: string; color: string; x: number; y: number; rx: number; ry: number; subTask?: string }>;
+  } | null;
+  github_repo_url: string | null;
+  repo_branch: string | null;
+  deliverable_content: string | null;
+  messages: Array<{
+    message_id: string;
+    sender_agent_id: string;
+    content_natural: string;
+    message_type: string;
+    timestamp: string | null;
+  }>;
+}
+
 export interface GlobalStats {
   total_agents: number;
   active_agents: number;
@@ -203,6 +235,16 @@ export async function fetchMySessions(): Promise<AdminSession[]> {
     return res.json();
   } catch {
     return [];
+  }
+}
+
+export async function fetchMySessionDetail(roomId: string): Promise<SessionDetail | null> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/v1/admin/my-sessions/${roomId}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
   }
 }
 

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Agent, SessionRole } from "../../lib/types";
-import { fetchAgents } from "../../lib/api";
+import { fetchAgents, fetchMySessionDetail } from "../../lib/api";
 import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
 import { useAuth } from "../../lib/auth";
@@ -257,6 +257,10 @@ export default function SessionBuildClient() {
   const [isDragging, setIsDragging] = useState(false);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Continue session
+  const continueFromLoadedRef = useRef(false);
+  const [continueFromId, setContinueFromId] = useState<string | null>(null);
 
   // Team templates
   const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
@@ -1116,6 +1120,54 @@ export default function SessionBuildClient() {
       .catch(() => {});
   }, [allAgents]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load canvas from ?continue_from= query param (runs after allAgents loads)
+  useEffect(() => {
+    if (allAgents.length === 0 || continueFromLoadedRef.current) return;
+    const continueFromParam = searchParams.get("continue_from");
+    if (!continueFromParam) return;
+    continueFromLoadedRef.current = true;
+    setContinueFromId(continueFromParam);
+    fetchMySessionDetail(continueFromParam).then((detail) => {
+      if (!detail?.session_graph?.agents) return;
+      const sg = detail.session_graph;
+      const newNodes: CanvasNode[] = [];
+      const oldToNew = new Map<string, string>();
+      const margin = 120;
+      let col = 0;
+      for (const agentNode of sg.agents) {
+        if (agentNode.is_human) {
+          const newId = "node-human-owner";
+          oldToNew.set(agentNode.id, newId);
+          newNodes.push({ id: newId, x: margin + col * 180, y: margin + 300, agent: HUMAN_STUB, role: "Requester", isHuman: true });
+          col++;
+          continue;
+        }
+        const rawId = agentNode.id.startsWith("node-") ? agentNode.id.slice(5) : agentNode.id;
+        const found = allAgents.find((a) => a.id === rawId || a.name === agentNode.name);
+        if (!found) continue;
+        const existingCount = newNodes.filter((n) => !n.isHuman && n.agent.id === found.id).length;
+        const newId = existingCount === 0 ? `node-${found.id}` : `node-${found.id}-${existingCount}`;
+        oldToNew.set(agentNode.id, newId);
+        const x = margin + (col % 4) * 200;
+        const y = margin + Math.floor(col / 4) * 180;
+        newNodes.push({ id: newId, x, y, agent: found, role: agentNode.role as SessionRole, isBuilder: agentNode.is_builder ?? false, clusterId: agentNode.clusterId ?? undefined });
+        col++;
+      }
+      const nodeIdSet = new Set(newNodes.map((n) => n.id));
+      const newConns: Conn[] = (sg.edges ?? [])
+        .flatMap((e, i) => {
+          const f = oldToNew.get(e.from);
+          const t = oldToNew.get(e.to);
+          if (!f || !t || !nodeIdSet.has(f) || !nodeIdSet.has(t)) return [];
+          return [{ id: `cfconn-${i}-${Date.now()}`, fromId: f, toId: t }];
+        });
+      const newClusters: Cluster[] = (sg.clusters ?? []).map((c) => ({ ...c, subTask: c.subTask ?? "" }));
+      setNodes(newNodes);
+      setConns(newConns);
+      setClusters(newClusters);
+    }).catch(() => {});
+  }, [allAgents]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function linkToAll(nodeId: string) {
     setConns((prev) => {
       const next = [...prev];
@@ -1297,11 +1349,13 @@ export default function SessionBuildClient() {
       });
       if (!signB.ok) throw new Error(`Failed to sign contract side B (${signB.status})`);
 
+      const continueFromParam = searchParams.get("continue_from");
       const roomParams = new URLSearchParams({
         contract_id,
         agent_a_id: agentAId,
         agent_b_id: agentBId,
         ...(githubRepo.trim() ? { github_repo_url: githubRepo.trim() } : {}),
+        ...(continueFromParam ? { continue_from_room_id: continueFromParam } : {}),
       });
       const roomRes = await apiFetch(`/rooms?${roomParams.toString()}`, { method: "POST" });
       if (!roomRes.ok) {
@@ -1482,6 +1536,23 @@ export default function SessionBuildClient() {
           </div>
         </div>
       </header>
+
+      {/* Continue session banner */}
+      {continueFromId && (
+        <div style={{
+          background: "rgba(78,205,196,0.08)",
+          borderBottom: "1px solid rgba(78,205,196,0.3)",
+          padding: "10px 24px",
+          display: "flex", alignItems: "center", gap: 10,
+          fontSize: 13, color: "#4ECDC4",
+        }}>
+          <span style={{ fontSize: 16 }}>↻</span>
+          <span>
+            <strong>Continuing from session #{continueFromId.slice(0, 8)}</strong>
+            {" — agents will have full context of previous work"}
+          </span>
+        </div>
+      )}
 
       {/* Top bar */}
       <div className="border-b border-al-border bg-al-surface px-4 py-3">

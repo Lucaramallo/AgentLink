@@ -233,14 +233,36 @@ async def agent_respond(
         if new_count == 1:
             await r.expire(count_key, _SESSION_TTL)
 
-        # Look up coordinator subtask from room plan if not explicitly provided
+        # Look up coordinator subtask and previous session context from DB
         subtask = payload.subtask
-        if subtask is None and _is_uuid(payload.room_id) and _is_uuid(raw_agent_id):
-            from app.models.room import Room as _RoomModel
+        previous_session_context: str | None = None
+        if _is_uuid(payload.room_id):
+            from app.models.room import Room as _RoomModel, Message as _Message, MessageType as _MessageType
             from app.services.coordinator_service import get_agent_subtask as _get_subtask
+            from sqlalchemy.future import select as _sa_select
             _room = await db.get(_RoomModel, _uuid_mod.UUID(payload.room_id))
-            if _room and _room.coordinator_plan:
-                subtask = _get_subtask(_room, raw_agent_id)
+            if _room:
+                if subtask is None and _is_uuid(raw_agent_id) and _room.coordinator_plan:
+                    subtask = _get_subtask(_room, raw_agent_id)
+                if _room.continue_from_room_id:
+                    _prev_res = await db.execute(
+                        _sa_select(_Message)
+                        .where(
+                            _Message.room_id == _room.continue_from_room_id,
+                            _Message.message_type == _MessageType.DELIVERABLE,
+                        )
+                        .order_by(_Message.timestamp.asc())
+                        .limit(5)
+                    )
+                    _prev_msgs = _prev_res.scalars().all()
+                    if _prev_msgs:
+                        _deliverable = "\n\n---\n\n".join(m.content_natural for m in _prev_msgs)
+                        previous_session_context = (
+                            f"## Previous Session Context\n"
+                            f"Session ID: {_room.continue_from_room_id}\n\n"
+                            f"Deliverable:\n{_deliverable}\n\n"
+                            f"The requester has additional instructions for this continuation session."
+                        )
 
         text = await get_agent_response(
             agent_id=agent_id,
@@ -254,6 +276,7 @@ async def agent_respond(
             rn_context=payload.rn_context,
             is_builder=payload.is_builder,
             repo_context=payload.repo_context,
+            previous_session_context=previous_session_context,
         )
 
         agent = AGENTS[agent_id]

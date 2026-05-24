@@ -8,6 +8,7 @@ import {
   fetchMyStats,
   fetchMyAgents,
   fetchMySessions,
+  fetchMySessionDetail,
   fetchRankings,
   updateAgent,
   pauseAgent,
@@ -22,6 +23,7 @@ import {
   API_BASE,
   type AdminAgent,
   type AdminSession,
+  type SessionDetail,
   type MyStats,
   type RankingEntry,
   type GithubRepo,
@@ -99,6 +101,9 @@ export default function AdminClient() {
   const [myStats, setMyStats] = useState<MyStats | null>(null);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [sessions, setSessions] = useState<AdminSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
+  const [sessionDetailLoading, setSessionDetailLoading] = useState(false);
   const [rankings, setRankings] = useState<RankingEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -260,6 +265,30 @@ export default function AdminClient() {
     { id: "ranking", label: "Global Ranking", icon: "🏆" },
     { id: "sessions", label: "Session History", icon: "📋" },
   ];
+
+  async function selectSession(roomId: string) {
+    if (selectedSessionId === roomId) {
+      setSelectedSessionId(null);
+      setSessionDetail(null);
+      return;
+    }
+    setSelectedSessionId(roomId);
+    setSessionDetail(null);
+    setSessionDetailLoading(true);
+    const detail = await fetchMySessionDetail(roomId);
+    setSessionDetail(detail);
+    setSessionDetailLoading(false);
+  }
+
+  function downloadSessionLog(detail: SessionDetail) {
+    const blob = new Blob([JSON.stringify(detail.messages, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `SESSION_LOG_${detail.room_id.slice(0, 8)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   function openEdit(a: AdminAgent) {
     setEditingAgent(a);
@@ -1180,7 +1209,7 @@ export default function AdminClient() {
         {tab === "sessions" && (
           <div>
             <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>Session History</h1>
-            <p style={{ color: "#64748B", marginBottom: 24, fontSize: 14 }}>All sessions where your agents participated.</p>
+            <p style={{ color: "#64748B", marginBottom: 24, fontSize: 14 }}>All sessions where your agents participated. Click a session to view details.</p>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {sessions.map(s => {
@@ -1190,31 +1219,160 @@ export default function AdminClient() {
                 const badgeLabel = isDisputed ? "DISPUTED" : isSuccess ? "SUCCESS" : isOpen ? s.status : (s.outcome ?? s.status);
                 const badgeBg = isDisputed ? "rgba(239,68,68,0.15)" : isSuccess ? "rgba(78,205,196,0.15)" : isOpen ? "rgba(245,158,11,0.15)" : "rgba(100,116,139,0.15)";
                 const badgeColor = isDisputed ? "#EF4444" : isSuccess ? "#4ECDC4" : isOpen ? "#F59E0B" : "#94A3B8";
+                const isSelected = selectedSessionId === s.room_id;
                 return (
-                  <div key={s.room_id} style={{
-                    background: "#0D1421",
-                    border: `1px solid ${isDisputed ? "rgba(239,68,68,0.4)" : "#1E2D4A"}`,
-                    borderRadius: 10, padding: "16px 20px", display: "flex", alignItems: "center", gap: 20,
-                  }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-                        <span style={{ fontWeight: 600, fontSize: 13, color: "#94A3B8" }}>#{s.room_id.slice(0, 8)}</span>
-                        <span style={{
-                          fontSize: 11, padding: "2px 8px", borderRadius: 20,
-                          background: badgeBg,
-                          color: badgeColor,
-                        }}>
-                          {badgeLabel}
-                        </span>
+                  <div key={s.room_id}>
+                    <div
+                      onClick={() => { void selectSession(s.room_id); }}
+                      style={{
+                        background: isSelected ? "#111827" : "#0D1421",
+                        border: `1px solid ${isSelected ? "#4ECDC4" : isDisputed ? "rgba(239,68,68,0.4)" : "#1E2D4A"}`,
+                        borderRadius: isSelected ? "10px 10px 0 0" : 10,
+                        padding: "16px 20px",
+                        display: "flex", alignItems: "center", gap: 20,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                          <span style={{ fontWeight: 600, fontSize: 13, color: "#94A3B8" }}>#{s.room_id.slice(0, 8)}</span>
+                          <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: badgeBg, color: badgeColor }}>
+                            {badgeLabel}
+                          </span>
+                        </div>
+                        <div style={{ color: "#64748B", fontSize: 12 }}>
+                          {s.agent_a_id.slice(0, 8)} ↔ {s.agent_b_id.slice(0, 8)}
+                        </div>
                       </div>
-                      <div style={{ color: "#64748B", fontSize: 12 }}>
-                        {s.agent_a_id.slice(0, 8)} ↔ {s.agent_b_id.slice(0, 8)}
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ color: "#64748B", fontSize: 11 }}>{fmtDate(s.created_at)}</div>
+                        {s.closed_at && <div style={{ color: "#64748B", fontSize: 11 }}>Closed {fmtDate(s.closed_at)}</div>}
                       </div>
+                      <div style={{ color: isSelected ? "#4ECDC4" : "#64748B", fontSize: 14 }}>{isSelected ? "▲" : "▼"}</div>
                     </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ color: "#64748B", fontSize: 11 }}>{fmtDate(s.created_at)}</div>
-                      {s.closed_at && <div style={{ color: "#64748B", fontSize: 11 }}>Closed {fmtDate(s.closed_at)}</div>}
-                    </div>
+
+                    {/* ── Session Detail Panel ── */}
+                    {isSelected && (
+                      <div style={{
+                        background: "#080E1A",
+                        border: "1px solid #4ECDC4",
+                        borderTop: "none",
+                        borderRadius: "0 0 10px 10px",
+                        padding: "20px 24px",
+                      }}>
+                        {sessionDetailLoading && (
+                          <div style={{ color: "#64748B", fontSize: 13, padding: "20px 0", textAlign: "center" }}>Loading session detail…</div>
+                        )}
+                        {!sessionDetailLoading && sessionDetail && (
+                          <>
+                            {/* Meta */}
+                            <div style={{ display: "flex", gap: 24, marginBottom: 20, flexWrap: "wrap" }}>
+                              <div>
+                                <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>Session ID</div>
+                                <div style={{ fontSize: 12, fontFamily: "monospace", color: "#94A3B8" }}>{sessionDetail.room_id}</div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>Date</div>
+                                <div style={{ fontSize: 12, color: "#94A3B8" }}>{fmtDate(sessionDetail.created_at)}</div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>Status</div>
+                                <div style={{ fontSize: 12, color: badgeColor }}>{badgeLabel}</div>
+                              </div>
+                              {sessionDetail.github_repo_url && (
+                                <div>
+                                  <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>GitHub Repo</div>
+                                  <a href={sessionDetail.github_repo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "#4ECDC4", textDecoration: "none" }}>
+                                    {sessionDetail.github_repo_url.replace("https://github.com/", "")}
+                                    {sessionDetail.repo_branch ? ` (${sessionDetail.repo_branch})` : ""}
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Team composition */}
+                            {sessionDetail.session_graph?.agents && sessionDetail.session_graph.agents.length > 0 && (
+                              <div style={{ marginBottom: 20 }}>
+                                <div style={{ fontSize: 12, color: "#64748B", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Team Composition</div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                  {sessionDetail.session_graph.agents
+                                    .filter(a => !a.is_human)
+                                    .map((agent, idx) => (
+                                      <div key={idx} style={{
+                                        background: "#0D1421",
+                                        border: "1px solid #1E2D4A",
+                                        borderRadius: 8,
+                                        padding: "8px 12px",
+                                        display: "flex", alignItems: "center", gap: 8,
+                                      }}>
+                                        <div>
+                                          <div style={{ fontSize: 13, fontWeight: 600, color: "#E2E8F0" }}>{agent.name}</div>
+                                          <div style={{ fontSize: 11, color: "#64748B" }}>
+                                            {agent.role}
+                                            {agent.is_builder ? " · Builder" : ""}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))
+                                  }
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Deliverable preview */}
+                            {sessionDetail.deliverable_content && (
+                              <div style={{ marginBottom: 20 }}>
+                                <div style={{ fontSize: 12, color: "#64748B", marginBottom: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Deliverable</div>
+                                <div style={{
+                                  background: "#0D1421",
+                                  border: "1px solid #1E2D4A",
+                                  borderRadius: 8,
+                                  padding: "12px 14px",
+                                  fontSize: 12,
+                                  color: "#94A3B8",
+                                  maxHeight: 200,
+                                  overflowY: "auto",
+                                  whiteSpace: "pre-wrap",
+                                  fontFamily: "monospace",
+                                  lineHeight: 1.5,
+                                }}>
+                                  {sessionDetail.deliverable_content.slice(0, 1200)}
+                                  {sessionDetail.deliverable_content.length > 1200 ? "\n\n… (truncated)" : ""}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Action buttons */}
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                              <button
+                                onClick={() => downloadSessionLog(sessionDetail)}
+                                style={{
+                                  background: "rgba(100,116,139,0.1)",
+                                  border: "1px solid #1E2D4A",
+                                  color: "#94A3B8",
+                                  padding: "8px 16px", borderRadius: 8, fontSize: 13,
+                                  cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                                }}
+                              >
+                                ↓ View full log
+                              </button>
+                              <button
+                                onClick={() => router.push(`/session/build?continue_from=${s.room_id}`)}
+                                style={{
+                                  background: "rgba(78,205,196,0.12)",
+                                  border: "1px solid rgba(78,205,196,0.5)",
+                                  color: "#4ECDC4",
+                                  padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Continue this session →
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -16,6 +16,7 @@ async def create_room(
     contract: RoomContract,
     github_repo_url: str | None = None,
     requester_user_id: uuid.UUID | None = None,
+    continue_from_room_id: uuid.UUID | None = None,
 ) -> Room:
     """Crea una nueva sala de colaboración entre dos agentes.
 
@@ -57,6 +58,7 @@ async def create_room(
         github_repo_url=github_repo_url,
         requester_user_id=requester_user_id,
         escrowed_alc=escrow,
+        continue_from_room_id=continue_from_room_id,
     )
     db.add(room)
     await db.flush()

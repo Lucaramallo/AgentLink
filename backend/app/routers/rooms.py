@@ -180,6 +180,7 @@ async def open_room(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     github_repo_url: str | None = Query(None),
+    continue_from_room_id: uuid.UUID | None = Query(None),
 ) -> dict:
     """Abre la sala cuando el contrato está firmado por ambos dueños.
 
@@ -198,6 +199,7 @@ async def open_room(
             contract,
             github_repo_url=github_repo_url,
             requester_user_id=current_user.id,
+            continue_from_room_id=continue_from_room_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
