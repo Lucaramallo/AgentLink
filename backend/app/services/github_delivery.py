@@ -27,15 +27,54 @@ def _b64(content: str) -> str:
     return base64.b64encode(content.encode()).decode()
 
 
-# Scan for named code fences: a code block preceded by a line containing a filename.
-# Handles all header formats: ### `file.py` (FINAL), ## FILE N: file.py, ## file.py,
-# ## **file.py**, ### file.py — the filename is detected from the preceding line.
-_CODE_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_CODE_FENCE_RE = re.compile(r"```([^\n]*)\n(.*?)```", re.DOTALL)
 
-_FILENAME_IN_LINE_RE = re.compile(
-    r"(?:^|[\s`*(:\[])([A-Za-z0-9_\-./]+\.(?:py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md))\b",
-    re.IGNORECASE,
-)
+_EXT = r"py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md|vue|go|rs|java|cpp|c"
+
+# Tried in order against each preceding line; first match wins.
+_FILENAME_PATTERNS: list[re.Pattern] = [
+    # **filename.ext** or *filename.ext* (bold / italic markdown)
+    re.compile(rf"\*{{1,2}}([A-Za-z0-9_\-./]+\.(?:{_EXT}))\*{{1,2}}", re.IGNORECASE),
+    # File: filename.ext  /  Filename: ...  /  Path: ...
+    re.compile(
+        rf"\b(?:file(?:name)?|path)\s*:\s*`?([A-Za-z0-9_\-./]+\.(?:{_EXT}))`?\b",
+        re.IGNORECASE,
+    ),
+    # General: ## `file.py`, ### FILE N: file.py, standalone `name.ext:`, plain mentions
+    re.compile(
+        rf"(?:^|[\s`*(:\[])([A-Za-z0-9_\-./]+\.(?:{_EXT}))\b",
+        re.IGNORECASE,
+    ),
+]
+
+_LANG_TO_FILENAME: dict[str, str] = {
+    "python": "main.py", "py": "main.py",
+    "html": "index.html",
+    "javascript": "main.js", "js": "main.js",
+    "typescript": "main.ts", "ts": "main.ts",
+    "css": "styles.css",
+    "jsx": "main.jsx",
+    "tsx": "main.tsx",
+    "json": "data.json",
+    "yaml": "config.yaml", "yml": "config.yml",
+    "sh": "script.sh", "bash": "script.sh",
+    "go": "main.go",
+    "rust": "main.rs", "rs": "main.rs",
+    "java": "Main.java",
+    "cpp": "main.cpp",
+    "c": "main.c",
+    "vue": "App.vue",
+    "markdown": "README.md", "md": "README.md",
+}
+
+
+def _find_filename_in_line(line: str) -> str | None:
+    """Return the first filename found in `line` using all known patterns, or None."""
+    for pattern in _FILENAME_PATTERNS:
+        m = pattern.search(line)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _extract_named_files(content: str) -> list[tuple[str, str]]:
@@ -46,23 +85,44 @@ def _extract_named_files(content: str) -> list[tuple[str, str]]:
         content[:200],
     )
     files: dict[str, str] = {}
+    content_lines = content.split("\n")
+    fence_matches = list(_CODE_FENCE_RE.finditer(content))
 
-    for m in _CODE_FENCE_RE.finditer(content):
-        # Find the last non-empty line before this code fence.
-        preceding_text = content[: m.start()].rstrip("\n")
-        preceding_line = ""
-        for line in reversed(preceding_text.split("\n")):
-            if line.strip():
-                preceding_line = line.strip()
+    for m in fence_matches:
+        lang = m.group(1).strip().lower()
+        body = m.group(2)
+        fence_start_line = content[: m.start()].count("\n")
+
+        # Look back through up to 3 non-empty lines before this fence.
+        found: str | None = None
+        non_empty_seen = 0
+        for i in range(fence_start_line - 1, max(-1, fence_start_line - 30), -1):
+            if i < 0:
+                break
+            line = content_lines[i].strip()
+            if not line:
+                continue
+            non_empty_seen += 1
+            if non_empty_seen > 3:
+                break
+            found = _find_filename_in_line(line)
+            if found:
                 break
 
-        if not preceding_line:
-            continue
+        if found:
+            files[found] = body.rstrip("\n")
 
-        fn_match = _FILENAME_IN_LINE_RE.search(preceding_line)
-        if fn_match:
-            filename = fn_match.group(1)
-            files[filename] = m.group(1).rstrip("\n")  # last occurrence wins
+    # Single-block fallback: infer filename from the language tag.
+    if not files and len(fence_matches) == 1:
+        lang = fence_matches[0].group(1).strip().lower()
+        inferred = _LANG_TO_FILENAME.get(lang)
+        if inferred:
+            files[inferred] = fence_matches[0].group(2).rstrip("\n")
+            logger.info(
+                "_extract_named_files: single block, inferred filename=%r from lang=%r",
+                inferred,
+                lang,
+            )
 
     result = list(files.items())
     logger.info(
@@ -206,6 +266,7 @@ async def deliver_to_github(
         commit_message = f"AgentLink session {id_short} — {agent_names_str}"
 
         commit_count = 0
+        project_files_committed = 0
         # Always commit DELIVERABLE.md with the full content as-is.
         deliverable_files: list[tuple[str, str, str, str]] = [
             (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
@@ -223,7 +284,7 @@ async def deliver_to_github(
         ]
 
         for path, content, agent_name, agent_email in files:
-            is_project_file = f"/{folder}/project/" in f"/{path}"
+            is_project_file = path.startswith(f"{folder}/project/")
             logger.info(
                 "deliver_to_github: committing path=%s project_file=%s content_len=%d",
                 path,
@@ -254,6 +315,15 @@ async def deliver_to_github(
             )
             if resp.status_code in (200, 201):
                 commit_count += 1
+                if is_project_file:
+                    project_files_committed += 1
+
+        if named_files and project_files_committed == 0:
+            logger.warning(
+                "deliver_to_github: %d named file(s) detected but none committed to project/ "
+                "(all commit requests failed for project files)",
+                len(named_files),
+            )
 
     branch_url = f"{repo_url}/tree/{branch_name}"
     return {

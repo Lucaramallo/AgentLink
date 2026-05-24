@@ -2626,19 +2626,56 @@ export default function SessionRoomClient() {
       .map((m) => m.content)
       .join("\n\n---\n\n");
 
-    const CODE_FENCE_RE = /```[^\n]*\n([\s\S]*?)```/g;
-    const FILENAME_IN_LINE_RE = /(?:^|[\s`*(:\[])([A-Za-z0-9_\-.\/]+\.(?:py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md))\b/i;
+    const _EXT = "py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md|vue|go|rs|java|cpp|c";
+    const CODE_FENCE_RE = new RegExp("```([^\\n]*)\\n([\\s\\S]*?)```", "g");
+    const FILENAME_PATTERNS = [
+      new RegExp(`\\*{1,2}([A-Za-z0-9_\\-./]+\\.(?:${_EXT}))\\*{1,2}`, "i"),
+      new RegExp(`\\b(?:file(?:name)?|path)\\s*:\\s*\`?([A-Za-z0-9_\\-./]+\\.(?:${_EXT}))\`?\\b`, "i"),
+      new RegExp(`(?:^|[\\s\`*(:\\[])([A-Za-z0-9_\\-./]+\\.(?:${_EXT}))\\b`, "i"),
+    ];
+    const LANG_TO_FILENAME: Record<string, string> = {
+      python: "main.py", py: "main.py",
+      html: "index.html",
+      javascript: "main.js", js: "main.js",
+      typescript: "main.ts", ts: "main.ts",
+      css: "styles.css", jsx: "main.jsx", tsx: "main.tsx",
+      json: "data.json", yaml: "config.yaml", yml: "config.yml",
+      sh: "script.sh", bash: "script.sh",
+      go: "main.go", rust: "main.rs", rs: "main.rs",
+      java: "Main.java", cpp: "main.cpp", c: "main.c",
+      vue: "App.vue", markdown: "README.md", md: "README.md",
+    };
     const namedFiles: Record<string, string> = {};
+    const allLines = allDeliverableContent.split("\n");
+    const fenceMatches: Array<{ startLine: number; lang: string; body: string }> = [];
     let fm: RegExpExecArray | null;
     while ((fm = CODE_FENCE_RE.exec(allDeliverableContent)) !== null) {
-      const preceding = allDeliverableContent.slice(0, fm.index).trimEnd();
-      let precedingLine = "";
-      for (const line of preceding.split("\n").reverse()) {
-        if (line.trim()) { precedingLine = line.trim(); break; }
+      fenceMatches.push({
+        startLine: allDeliverableContent.slice(0, fm.index).split("\n").length - 1,
+        lang: fm[1].trim().toLowerCase(),
+        body: fm[2],
+      });
+    }
+    for (const fence of fenceMatches) {
+      let found: string | null = null;
+      let nonEmptySeen = 0;
+      for (let i = fence.startLine - 1; i >= Math.max(0, fence.startLine - 30); i--) {
+        const line = allLines[i]?.trim() ?? "";
+        if (!line) continue;
+        nonEmptySeen++;
+        if (nonEmptySeen > 3) break;
+        for (const pat of FILENAME_PATTERNS) {
+          const hit = pat.exec(line);
+          if (hit) { found = hit[1]; break; }
+        }
+        if (found) break;
       }
-      if (!precedingLine) continue;
-      const fnm = FILENAME_IN_LINE_RE.exec(precedingLine);
-      if (fnm) namedFiles[fnm[1]] = fm[1].replace(/\n$/, "");
+      if (found) namedFiles[found] = fence.body.replace(/\n$/, "");
+    }
+    // Single-block fallback: infer filename from language tag.
+    if (Object.keys(namedFiles).length === 0 && fenceMatches.length === 1) {
+      const inferred = LANG_TO_FILENAME[fenceMatches[0].lang];
+      if (inferred) namedFiles[inferred] = fenceMatches[0].body.replace(/\n$/, "");
     }
     for (const [filename, content] of Object.entries(namedFiles)) {
       zip.file(`project/${filename}`, content);
