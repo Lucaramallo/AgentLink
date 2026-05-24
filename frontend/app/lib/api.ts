@@ -159,9 +159,10 @@ export interface SessionDetail {
   github_repo_url: string | null;
   repo_branch: string | null;
   deliverable_content: string | null;
+  continue_from_room_id: string | null;
   messages: Array<{
-    message_id: string;
-    sender_agent_id: string;
+    message_id: string | null;
+    sender_agent_id: string | null;
     content_natural: string;
     message_type: string;
     timestamp: string | null;

@@ -106,6 +106,7 @@ class SessionDetailOut(BaseModel):
     repo_branch: str | None
     deliverable_content: str | None
     messages: list[dict]
+    continue_from_room_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -245,17 +246,49 @@ async def my_session_detail(
     if deliverable_msgs:
         deliverable_content = "\n\n---\n\n".join(m.content_natural for m in deliverable_msgs)
 
-    # Serialize all messages for SESSION_LOG download
-    serialized_messages = [
-        {
+    # Serialize all messages for SESSION_LOG download.
+    # When this session continues a previous one, prepend the previous session's
+    # messages so the downloaded log covers the full chain of work.
+    serialized_messages: list[dict] = []
+    if room.continue_from_room_id:
+        prev_result = await db.execute(
+            select(Room)
+            .options(selectinload(Room.messages))
+            .where(Room.room_id == room.continue_from_room_id)
+        )
+        prev_room = prev_result.scalar_one_or_none()
+        if prev_room:
+            serialized_messages.append({
+                "message_id": None,
+                "sender_agent_id": None,
+                "content_natural": f"[PREVIOUS SESSION {room.continue_from_room_id}]",
+                "message_type": "SYSTEM",
+                "timestamp": None,
+            })
+            for m in prev_room.messages:
+                serialized_messages.append({
+                    "message_id": str(m.message_id),
+                    "sender_agent_id": str(m.sender_agent_id),
+                    "content_natural": m.content_natural,
+                    "message_type": m.message_type.value,
+                    "timestamp": m.timestamp.isoformat() if m.timestamp else None,
+                })
+            serialized_messages.append({
+                "message_id": None,
+                "sender_agent_id": None,
+                "content_natural": f"[CURRENT SESSION {room.room_id}]",
+                "message_type": "SYSTEM",
+                "timestamp": None,
+            })
+
+    for m in room.messages:
+        serialized_messages.append({
             "message_id": str(m.message_id),
             "sender_agent_id": str(m.sender_agent_id),
             "content_natural": m.content_natural,
             "message_type": m.message_type.value,
             "timestamp": m.timestamp.isoformat() if m.timestamp else None,
-        }
-        for m in room.messages
-    ]
+        })
 
     return SessionDetailOut(
         room_id=room.room_id,
@@ -268,6 +301,7 @@ async def my_session_detail(
         repo_branch=room.repo_branch,
         deliverable_content=deliverable_content,
         messages=serialized_messages,
+        continue_from_room_id=str(room.continue_from_room_id) if room.continue_from_room_id else None,
     )
 
 

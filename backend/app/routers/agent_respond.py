@@ -1,5 +1,6 @@
 """Agent respond router — live AI agent responses with Redis-backed rate limiting."""
 
+import logging
 import uuid as _uuid_mod
 
 from fastapi import APIRouter, Depends, Request
@@ -13,6 +14,8 @@ from app.database import get_db
 from app.models.user import UserRole
 from app.services.agent_engine import AGENTS, get_agent_response, get_peer_review
 from app.services.webhook_caller import call_agent_webhook
+
+logger = logging.getLogger(__name__)
 
 _WHITELISTED_EMAILS: frozenset[str] = frozenset({"owner@agentlink.ai", "admin@agentlink.ai"})
 
@@ -128,6 +131,62 @@ async def agent_respond(
     registered_agent_name: str | None = None
 
     try:
+        # ── Resolve previous session context (applies to all agent types) ──
+        subtask = payload.subtask
+        previous_session_context: str | None = None
+        if _is_uuid(payload.room_id):
+            from app.models.room import Room as _RoomModel, Message as _Message, MessageType as _MessageType
+            from app.services.coordinator_service import get_agent_subtask as _get_subtask
+            from sqlalchemy.future import select as _sa_select
+            _room = await db.get(_RoomModel, _uuid_mod.UUID(payload.room_id))
+            logger.info(
+                "agent_respond: room_id=%s found=%s continue_from_room_id=%s",
+                payload.room_id,
+                _room is not None,
+                _room.continue_from_room_id if _room else None,
+            )
+            if _room:
+                if subtask is None and _is_uuid(raw_agent_id) and _room.coordinator_plan:
+                    subtask = _get_subtask(_room, raw_agent_id)
+                if _room.continue_from_room_id:
+                    logger.info(
+                        "agent_respond: fetching previous DELIVERABLE messages from room=%s",
+                        _room.continue_from_room_id,
+                    )
+                    _prev_res = await db.execute(
+                        _sa_select(_Message)
+                        .where(
+                            _Message.room_id == _room.continue_from_room_id,
+                            _Message.message_type == _MessageType.DELIVERABLE,
+                        )
+                        .order_by(_Message.timestamp.asc())
+                        .limit(5)
+                    )
+                    _prev_msgs = _prev_res.scalars().all()
+                    logger.info(
+                        "agent_respond: previous DELIVERABLE messages found=%d",
+                        len(_prev_msgs),
+                    )
+                    if _prev_msgs:
+                        _deliverable = "\n\n---\n\n".join(m.content_natural for m in _prev_msgs)
+                        previous_session_context = (
+                            f"## Previous Session Context\n"
+                            f"Session ID: {_room.continue_from_room_id}\n\n"
+                            f"Deliverable:\n{_deliverable}\n\n"
+                            f"The requester has additional instructions for this continuation session."
+                        )
+                        logger.info(
+                            "agent_respond: previous_session_context built len=%d first_100=%r",
+                            len(previous_session_context),
+                            previous_session_context[:100],
+                        )
+                    else:
+                        logger.info(
+                            "agent_respond: no previous DELIVERABLE messages found — context will be None"
+                        )
+        else:
+            logger.info("agent_respond: room_id=%s is not a valid UUID — skipping context lookup", payload.room_id)
+
         # ── Try DB agent first (external agents with webhook_url) ──────────
         if _is_uuid(raw_agent_id):
             from app.models.agent import Agent as AgentModel
@@ -155,9 +214,19 @@ async def agent_respond(
                                 snapshot_webhook_url = snap.get("webhook_url")
                                 break
 
+                # Prepend previous session context to the message so webhook
+                # agents receive the prior deliverable in their payload.
+                effective_message = payload.message
+                if previous_session_context:
+                    effective_message = f"{previous_session_context}\n\n{payload.message}"
+                    logger.info(
+                        "agent_respond: injecting previous_session_context into webhook message agent_id=%s",
+                        raw_agent_id,
+                    )
+
                 result = await call_agent_webhook(
                     agent=db_agent,
-                    message=payload.message,
+                    message=effective_message,
                     session_messages=payload.session_messages,
                     room_id=payload.room_id,
                     db=db,
@@ -233,37 +302,11 @@ async def agent_respond(
         if new_count == 1:
             await r.expire(count_key, _SESSION_TTL)
 
-        # Look up coordinator subtask and previous session context from DB
-        subtask = payload.subtask
-        previous_session_context: str | None = None
-        if _is_uuid(payload.room_id):
-            from app.models.room import Room as _RoomModel, Message as _Message, MessageType as _MessageType
-            from app.services.coordinator_service import get_agent_subtask as _get_subtask
-            from sqlalchemy.future import select as _sa_select
-            _room = await db.get(_RoomModel, _uuid_mod.UUID(payload.room_id))
-            if _room:
-                if subtask is None and _is_uuid(raw_agent_id) and _room.coordinator_plan:
-                    subtask = _get_subtask(_room, raw_agent_id)
-                if _room.continue_from_room_id:
-                    _prev_res = await db.execute(
-                        _sa_select(_Message)
-                        .where(
-                            _Message.room_id == _room.continue_from_room_id,
-                            _Message.message_type == _MessageType.DELIVERABLE,
-                        )
-                        .order_by(_Message.timestamp.asc())
-                        .limit(5)
-                    )
-                    _prev_msgs = _prev_res.scalars().all()
-                    if _prev_msgs:
-                        _deliverable = "\n\n---\n\n".join(m.content_natural for m in _prev_msgs)
-                        previous_session_context = (
-                            f"## Previous Session Context\n"
-                            f"Session ID: {_room.continue_from_room_id}\n\n"
-                            f"Deliverable:\n{_deliverable}\n\n"
-                            f"The requester has additional instructions for this continuation session."
-                        )
-
+        logger.info(
+            "agent_respond: calling get_agent_response agent_id=%s previous_session_context=%s",
+            agent_id,
+            previous_session_context is not None,
+        )
         text = await get_agent_response(
             agent_id=agent_id,
             message=payload.message,

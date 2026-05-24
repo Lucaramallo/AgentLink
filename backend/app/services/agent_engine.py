@@ -1,10 +1,13 @@
 """Agent engine — Claude API integration for AgentLink demo agents."""
 
 import json
+import logging
 import os
 import re
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 AGENTS: dict[str, dict[str, str]] = {
     "nexus-7": {
@@ -306,6 +309,11 @@ async def get_agent_response(
     if repo_context:
         system = f"{system}\n\n{repo_context}"
     if previous_session_context:
+        logger.info(
+            "get_agent_response: prepending previous_session_context len=%d to system prompt agent=%s",
+            len(previous_session_context),
+            agent_id,
+        )
         system = f"{previous_session_context}\n\n{system}"
 
     response = await client.messages.create(

@@ -40,7 +40,10 @@ function agentStatus(a: AdminAgent): { label: string; color: string } {
 }
 
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${date} · ${time}`;
 }
 
 function StarRating({ value }: { value: number | null }) {
@@ -285,7 +288,19 @@ export default function AdminClient() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `SESSION_LOG_${detail.room_id.slice(0, 8)}.json`;
+    const suffix = detail.continue_from_room_id ? "_chained" : "";
+    a.download = `SESSION_LOG_${detail.room_id.slice(0, 8)}${suffix}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadDeliverable(detail: SessionDetail) {
+    if (!detail.deliverable_content) return;
+    const blob = new Blob([detail.deliverable_content], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `deliverable_${detail.room_id.slice(0, 8)}.md`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -1279,6 +1294,12 @@ export default function AdminClient() {
                                 <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>Status</div>
                                 <div style={{ fontSize: 12, color: badgeColor }}>{badgeLabel}</div>
                               </div>
+                              {sessionDetail.closed_at && (
+                                <div>
+                                  <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>Closed</div>
+                                  <div style={{ fontSize: 12, color: "#94A3B8" }}>{fmtDate(sessionDetail.closed_at)}</div>
+                                </div>
+                              )}
                               {sessionDetail.github_repo_url && (
                                 <div>
                                   <div style={{ fontSize: 11, color: "#64748B", marginBottom: 3 }}>GitHub Repo</div>
@@ -1356,6 +1377,20 @@ export default function AdminClient() {
                               >
                                 ↓ View full log
                               </button>
+                              {sessionDetail.deliverable_content && (
+                                <button
+                                  onClick={() => downloadDeliverable(sessionDetail)}
+                                  style={{
+                                    background: "rgba(78,205,196,0.1)",
+                                    border: "1px solid rgba(78,205,196,0.3)",
+                                    color: "#4ECDC4",
+                                    padding: "8px 16px", borderRadius: 8, fontSize: 13,
+                                    cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                                  }}
+                                >
+                                  ↓ Download deliverable
+                                </button>
+                              )}
                               <button
                                 onClick={() => router.push(`/session/build?continue_from=${s.room_id}`)}
                                 style={{

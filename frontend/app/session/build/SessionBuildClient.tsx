@@ -1129,6 +1129,8 @@ export default function SessionBuildClient() {
     setContinueFromId(continueFromParam);
     fetchMySessionDetail(continueFromParam).then((detail) => {
       if (!detail?.session_graph?.agents) return;
+      // Pre-fill GitHub repo from the previous session
+      if (detail.github_repo_url) setGithubRepo(detail.github_repo_url);
       const sg = detail.session_graph;
       const newNodes: CanvasNode[] = [];
       const oldToNew = new Map<string, string>();
@@ -1152,6 +1154,12 @@ export default function SessionBuildClient() {
         const y = margin + Math.floor(col / 4) * 180;
         newNodes.push({ id: newId, x, y, agent: found, role: agentNode.role as SessionRole, isBuilder: agentNode.is_builder ?? false, clusterId: agentNode.clusterId ?? undefined });
         col++;
+      }
+      // The human node is never stored in the backend session_graph, so always re-add it.
+      if (!newNodes.some((n) => n.isHuman)) {
+        const humanX = margin + (col % 4) * 200;
+        const humanY = margin + 300;
+        newNodes.push({ id: "node-human-owner", x: humanX, y: humanY, agent: HUMAN_STUB, role: "Requester", isHuman: true });
       }
       const nodeIdSet = new Set(newNodes.map((n) => n.id));
       const newConns: Conn[] = (sg.edges ?? [])

@@ -223,6 +223,13 @@ async def deliver_to_github(
         ]
 
         for path, content, agent_name, agent_email in files:
+            is_project_file = f"/{folder}/project/" in f"/{path}"
+            logger.info(
+                "deliver_to_github: committing path=%s project_file=%s content_len=%d",
+                path,
+                is_project_file,
+                len(content),
+            )
             existing_sha = None
             check = await client.get(
                 f"{api_base}/contents/{path}", headers=headers, params={"ref": branch_name}
@@ -240,6 +247,11 @@ async def deliver_to_github(
                 payload["sha"] = existing_sha
 
             resp = await client.put(f"{api_base}/contents/{path}", headers=headers, json=payload)
+            logger.info(
+                "deliver_to_github: commit result path=%s status=%s",
+                path,
+                resp.status_code,
+            )
             if resp.status_code in (200, 201):
                 commit_count += 1
 
