@@ -1185,6 +1185,11 @@ export default function AdminClient() {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {sessions.map(s => {
                 const isDisputed = s.outcome === "DISPUTE" || s.status === "DISPUTED";
+                const isSuccess = s.outcome === "SUCCESS";
+                const isOpen = s.status === "OPEN" || s.status === "REVISION";
+                const badgeLabel = isDisputed ? "DISPUTED" : isSuccess ? "SUCCESS" : isOpen ? s.status : (s.outcome ?? s.status);
+                const badgeBg = isDisputed ? "rgba(239,68,68,0.15)" : isSuccess ? "rgba(78,205,196,0.15)" : isOpen ? "rgba(245,158,11,0.15)" : "rgba(100,116,139,0.15)";
+                const badgeColor = isDisputed ? "#EF4444" : isSuccess ? "#4ECDC4" : isOpen ? "#F59E0B" : "#94A3B8";
                 return (
                   <div key={s.room_id} style={{
                     background: "#0D1421",
@@ -1196,10 +1201,10 @@ export default function AdminClient() {
                         <span style={{ fontWeight: 600, fontSize: 13, color: "#94A3B8" }}>#{s.room_id.slice(0, 8)}</span>
                         <span style={{
                           fontSize: 11, padding: "2px 8px", borderRadius: 20,
-                          background: isDisputed ? "rgba(239,68,68,0.15)" : "rgba(78,205,196,0.15)",
-                          color: isDisputed ? "#EF4444" : "#4ECDC4",
+                          background: badgeBg,
+                          color: badgeColor,
                         }}>
-                          {isDisputed ? "DISPUTED" : "SUCCESS"}
+                          {badgeLabel}
                         </span>
                       </div>
                       <div style={{ color: "#64748B", fontSize: 12 }}>

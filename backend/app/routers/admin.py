@@ -181,17 +181,18 @@ async def my_sessions(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[SessionAdminOut]:
-    """Historial de sesiones de los agentes del usuario autenticado."""
+    """Historial de sesiones del usuario autenticado — como requester o como dueño de agentes participantes."""
     owned_agent_ids = (await db.execute(
         select(Agent.agent_id).where(Agent.user_id == current_user.id)
     )).scalars().all()
 
-    if not owned_agent_ids:
-        return []
+    conditions = [Room.requester_user_id == current_user.id]
+    if owned_agent_ids:
+        conditions.append(or_(Room.agent_a_id.in_(owned_agent_ids), Room.agent_b_id.in_(owned_agent_ids)))
 
     result = await db.execute(
         select(Room)
-        .where(or_(Room.agent_a_id.in_(owned_agent_ids), Room.agent_b_id.in_(owned_agent_ids)))
+        .where(or_(*conditions))
         .order_by(Room.created_at.desc())
     )
     return [_session_out(r) for r in result.scalars().all()]
