@@ -8,6 +8,7 @@ while IFS= read -r line; do
         *=*) export "${line?}" 2>/dev/null ;;
     esac
 done < ~/AgentLink/backend/.env
+export GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PAT
 
 echo "Stopping existing services..."
 pkill -9 -f uvicorn 2>/dev/null
@@ -75,7 +76,13 @@ cloudflared tunnel --url http://localhost:3001 2>&1 | while IFS= read -r line; d
             if [ "$HTTP_STATUS" = "200" ]; then
                 echo "OK GitHub OAuth callback updated to $CALLBACK_URL"
             else
-                echo "WARN GitHub OAuth update failed (HTTP $HTTP_STATUS) - update manually: $CALLBACK_URL"
+                echo ""
+echo "══════════════════════════════════════════════"
+echo "⚠️  ACTION REQUIRED — paste this URL in GitHub:"
+echo "   $CALLBACK_URL"
+echo "   → github.com/settings/developers → OAuth Apps → AgentLink"
+echo "══════════════════════════════════════════════"
+echo ""
             fi
 
             cd ~/AgentLink
