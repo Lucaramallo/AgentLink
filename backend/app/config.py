@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     github_redirect_uri: str = "http://127.0.0.1:3001/auth/github/callback"
     # GitHub REST API base URL
     github_api_url: str = "https://api.github.com"
+    # GitHub OAuth (alternative field names)
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_pat: str = ""
     # Server-side ed25519 signing key (base64) — used to sign human-proposed polls
     # Generate with: python3 -c "import nacl.signing, base64; k=nacl.signing.SigningKey.generate(); print(base64.b64encode(bytes(k)).decode())"
     server_signing_key: str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
