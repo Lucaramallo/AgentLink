@@ -184,6 +184,41 @@ async def agent_respond(
                         logger.info(
                             "agent_respond: no previous DELIVERABLE messages found — context will be None"
                         )
+                    # Inject project files from the previous session's GitHub branch
+                    _prev_room = await db.get(_RoomModel, _room.continue_from_room_id)
+                    if (
+                        _prev_room
+                        and _prev_room.github_repo_url
+                        and _prev_room.repo_branch
+                    ):
+                        from app.models.user import User as _UserModel
+                        from app.services.github_repo import get_project_files as _get_project_files
+                        from app.services.github_delivery import _decrypt_token as _decrypt_github_token
+                        _session_owner = None
+                        if _room.requester_user_id:
+                            _session_owner = await db.get(_UserModel, _room.requester_user_id)
+                        if _session_owner and _session_owner.github_access_token:
+                            _gh_token = _decrypt_github_token(_session_owner.github_access_token)
+                            _project_files = await _get_project_files(
+                                repo_url=_prev_room.github_repo_url,
+                                branch=_prev_room.repo_branch,
+                                session_id=str(_room.continue_from_room_id),
+                                github_token=_gh_token,
+                            )
+                            logger.info(
+                                "agent_respond: project files fetched count=%d from prev_room=%s",
+                                len(_project_files),
+                                _room.continue_from_room_id,
+                            )
+                            if _project_files:
+                                _files_section = "\n\n## Previous Session Project Files\n"
+                                for _pf in _project_files:
+                                    _ext = _pf["filename"].rsplit(".", 1)[-1] if "." in _pf["filename"] else ""
+                                    _files_section += f"\n### {_pf['filename']}\n```{_ext}\n{_pf['content']}\n```\n"
+                                if previous_session_context:
+                                    previous_session_context += _files_section
+                                else:
+                                    previous_session_context = _files_section
         else:
             logger.info("agent_respond: room_id=%s is not a valid UUID — skipping context lookup", payload.room_id)
 

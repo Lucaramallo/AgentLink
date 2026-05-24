@@ -257,6 +257,66 @@ async def commit_file(
         return commit_sha
 
 
+async def get_project_files(
+    repo_url: str,
+    branch: str,
+    session_id: str,
+    github_token: str,
+) -> list[dict]:
+    """List and fetch project files from sessions/{session_id}/project/ on the given branch.
+
+    Returns a list of {"filename": str, "content": str} dicts.
+    Returns [] if the path doesn't exist or any error occurs.
+    """
+    if not github_token:
+        return []
+    repo_path = _parse_repo_path(repo_url)
+    prefix = f"sessions/{session_id}/project"
+    api_base = f"https://api.github.com/repos/{repo_path}"
+    hdrs = _headers(github_token)
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            list_resp = await client.get(
+                f"{api_base}/contents/{prefix}",
+                headers=hdrs,
+                params={"ref": branch},
+            )
+            if list_resp.status_code == 404:
+                return []
+            if list_resp.status_code != 200:
+                logger.warning(
+                    "get_project_files: GitHub API error %d listing %s",
+                    list_resp.status_code,
+                    prefix,
+                )
+                return []
+
+            items = list_resp.json()
+            if not isinstance(items, list):
+                return []
+
+            files: list[dict] = []
+            for item in items:
+                if item.get("type") != "file":
+                    continue
+                file_resp = await client.get(item["url"], headers=hdrs)
+                if file_resp.status_code != 200:
+                    continue
+                data = file_resp.json()
+                if data.get("encoding") == "base64":
+                    raw_bytes = base64.b64decode(data["content"])
+                else:
+                    raw_bytes = data.get("content", "").encode()
+                content = raw_bytes[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+                files.append({"filename": item["name"], "content": content})
+
+            return files
+    except Exception as exc:
+        logger.warning("get_project_files: error fetching project files: %s", exc)
+        return []
+
+
 async def merge_branch_to_main(
     github_token_encrypted: str,
     repo_url: str,
