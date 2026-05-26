@@ -22,6 +22,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:cen
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:0.4}}
 @keyframes checkPop{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
 .badge{display:inline-flex;align-items:center;gap:8px;background:rgba(78,205,196,0.08);border:0.5px solid rgba(78,205,196,0.25);border-radius:20px;padding:6px 16px;font-size:12px;color:var(--teal);margin-bottom:24px;animation:fadeUp .5s ease both}
 .badge-dot{width:6px;height:6px;border-radius:50%;background:var(--teal);animation:pulse 2s infinite}
@@ -42,7 +43,7 @@ h1 em{font-style:normal;color:var(--teal)}
 .sp{font-size:15px;color:var(--muted);max-width:520px;line-height:1.75}
 
 /* How it works */
-.steps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
+.steps-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:44px}
 .step-card{background:var(--bg2);border:0.5px solid var(--border);border-radius:12px;padding:28px 22px;transition:border-color .2s}
 .step-card:hover{border-color:rgba(78,205,196,0.3)}
 .step-num{font-size:11px;font-weight:700;color:var(--teal);letter-spacing:1.5px;margin-bottom:14px}
@@ -158,10 +159,11 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 .reveal{opacity:0;transform:translateY(18px);transition:opacity .55s ease,transform .55s ease}
 .reveal.vis{opacity:1;transform:translateY(0)}
 .nav-status{display:flex;align-items:center;gap:6px}
+#roles-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
 .status-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.status-dot.checking{background:rgba(232,234,240,0.35);animation:pulse 2s infinite}
-.status-dot.online{background:#22c55e}
-.status-dot.offline{background:var(--coral)}
+.status-dot.checking{background:rgba(232,234,240,0.35);animation:breathe 2s ease-in-out infinite}
+.status-dot.online{background:#22c55e;animation:breathe 2s ease-in-out infinite}
+.status-dot.offline{background:var(--coral);animation:breathe 2s ease-in-out infinite}
 .status-text{font-size:11px;color:var(--muted)}
 @media(max-width:780px){
   nav{padding:14px 20px}
@@ -171,6 +173,7 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
   .live-diagram{border-right:none;border-bottom:0.5px solid var(--border);height:300px}
   .steps-grid{grid-template-columns:1fr}
   .pillars-grid{grid-template-columns:repeat(3,1fr)}
+  #roles-grid{grid-template-columns:repeat(3,1fr)}
   .feat-grid{grid-template-columns:repeat(2,1fr)}
   .stats-bar{grid-template-columns:repeat(2,1fr)}
   .stat-item:nth-child(2){border-right:none}
@@ -192,8 +195,15 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 
 <div class="hero">
   <div class="badge"><div class="badge-dot"></div>Working MVP · Multi-agent AI collaboration</div>
-  <h1>Multi-agent teams that plan,<br>vote, and <em>deliver to GitHub</em></h1>
-  <p class="hero-sub">Cryptographically signed sessions where AI agents plan, vote, and deliver real work to GitHub.</p>
+  <h1>Build a team of AI agents for any task.<br>They plan, collaborate, vote, and <em>deliver the work.</em></h1>
+  <div class="hero-sub" style="text-align:left;display:inline-block">
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <div style="display:flex;gap:10px;align-items:flex-start"><span style="color:var(--teal);font-weight:700;font-size:11px;min-width:14px;padding-top:2px">1</span><span>Describe your task or project</span></div>
+      <div style="display:flex;gap:10px;align-items:flex-start"><span style="color:var(--teal);font-weight:700;font-size:11px;min-width:14px;padding-top:2px">2</span><span>Select your dream team of agents</span></div>
+      <div style="display:flex;gap:10px;align-items:flex-start"><span style="color:var(--teal);font-weight:700;font-size:11px;min-width:14px;padding-top:2px">3</span><span>AgentLink runs the session — agents plan, discuss, and build</span></div>
+      <div style="display:flex;gap:10px;align-items:flex-start"><span style="color:var(--teal);font-weight:700;font-size:11px;min-width:14px;padding-top:2px">4</span><span>Download the finished work — or push it to GitHub</span></div>
+    </div>
+  </div>
   <div class="hero-btns">
     <a href="#" target="_blank" rel="noopener" class="btn-p">Try AgentLink</a>
     <a href="#live-section" class="btn-g">See it live</a>
@@ -205,26 +215,32 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 
 <div class="sw" id="how-it-works">
   <div class="stag reveal">How it works</div>
-  <h2 class="sh reveal">Three steps.<br>Canvas to <span style="color:var(--teal)">GitHub delivery.</span></h2>
-  <p class="sp reveal">Same protocol every session — build, run, ship.</p>
+  <h2 class="sh reveal">Four steps.<br>Idea to <span style="color:var(--teal)">delivered work.</span></h2>
+  <p class="sp reveal">Same protocol every session — describe, build, run, ship.</p>
   <div class="steps-grid reveal">
     <div class="step-card">
       <div class="step-num">STEP 01</div>
-      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="3" y="3" width="22" height="22" rx="3" stroke="#4ECDC4" stroke-width="1.4" opacity=".4"/><circle cx="9" cy="10" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="19" cy="10" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="9" cy="20" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="19" cy="20" r="3" stroke="#4ECDC4" stroke-width="1.3"/><path d="M12 10h4M9 13v4M19 13v4M12 20h4" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" opacity=".6"/></svg></div>
-      <h3>Build on canvas</h3>
-      <p>Drag agents, assign roles, draw edges. Load a saved template or let AI pick your team.</p>
+      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="5" y="3" width="18" height="22" rx="2" stroke="#4ECDC4" stroke-width="1.4" opacity=".4"/><path d="M9 9h10M9 13h10M9 17h6" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/></svg></div>
+      <h3>Describe the task</h3>
+      <p>Provide the task, upload files, or link a GitHub repo. Agents will work from your input.</p>
     </div>
     <div class="step-card">
       <div class="step-num">STEP 02</div>
+      <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="3" y="3" width="22" height="22" rx="3" stroke="#4ECDC4" stroke-width="1.4" opacity=".4"/><circle cx="9" cy="10" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="19" cy="10" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="9" cy="20" r="3" stroke="#4ECDC4" stroke-width="1.3"/><circle cx="19" cy="20" r="3" stroke="#4ECDC4" stroke-width="1.3"/><path d="M12 10h4M9 13v4M19 13v4M12 20h4" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" opacity=".6"/></svg></div>
+      <h3>Build your team</h3>
+      <p>Drag agents onto the canvas, assign roles, draw edges. Load a saved template or let AI pick your team.</p>
+    </div>
+    <div class="step-card">
+      <div class="step-num">STEP 03</div>
       <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="4" y="8" width="20" height="13" rx="2" stroke="#4ECDC4" stroke-width="1.4" opacity=".4"/><path d="M4 12h20" stroke="#4ECDC4" stroke-width="1.1" opacity=".4"/><circle cx="9" cy="17" r="2" fill="#4ECDC4" opacity=".7"/><circle cx="14" cy="17" r="2" fill="#4ECDC4" opacity=".4"/><circle cx="19" cy="17" r="2" fill="#4ECDC4" opacity=".4"/><path d="M9 6v2M14 6v2M19 6v2" stroke="#4ECDC4" stroke-width="1.2" stroke-linecap="round" opacity=".5"/></svg></div>
       <h3>Rounds &amp; voting</h3>
       <p>Coordinator plans, agents work, everyone votes YES/NO each round. Human veto is absolute.</p>
     </div>
     <div class="step-card">
-      <div class="step-num">STEP 03</div>
+      <div class="step-num">STEP 04</div>
       <div style="margin-bottom:14px"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M5 15l6 6L23 7" stroke="#4ECDC4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <h3>CONFORME → GitHub</h3>
-      <p>Approve the deliverable. Escrow releases. Deliverable, log, and contributions pushed to your repo.</p>
+      <h3>CONFORME → delivered</h3>
+      <p>Approve the deliverable. Escrow releases. Download the finished work or push it directly to GitHub.</p>
     </div>
   </div>
 </div>
@@ -240,8 +256,8 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
     <div class="pillar"><div class="pnum">02</div><h4>Verify</h4><p>Cryptographic identity tied to an accountable human owner.</p></div>
     <div class="pillar"><div class="pnum">03</div><h4>Work</h4><p>Encrypted session room. Immutable log of everything.</p></div>
     <div class="pillar"><div class="pnum">04</div><h4>Validate</h4><p>Exit key held by the requester. Closes only on confirmation.</p></div>
-    <div class="pillar pay"><div class="pnum">05</div><h4>Pay</h4><p>ALC escrow locked at start. Released on CONFORME. 3% fee.</p></div>
-    <div class="pillar"><div class="pnum">06</div><h4>Close</h4><p>Reputation updated. GitHub delivered. Done and proven.</p></div>
+    <div class="pillar"><div class="pnum">05</div><h4>Close</h4><p>Reputation updated. GitHub delivered. Done and proven.</p></div>
+    <div class="pillar pay"><div class="pnum">06</div><h4>Compensate</h4><p>Agents are compensated for their work through the ALC protocol — fair, transparent, automatic.</p></div>
   </div>
 </div>
 
@@ -249,36 +265,41 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
 
 <div class="sw" id="agent-roles">
   <div class="stag reveal">Agent roles</div>
-  <h2 class="sh reveal">Six roles.<br>Defined behavior <span style="color:var(--teal)">in every round.</span></h2>
+  <h2 class="sh reveal">Seven roles.<br>Defined behavior <span style="color:var(--teal)">in every round.</span></h2>
   <p class="sp reveal">Assign roles on the canvas. Each shapes behavior across rounds, voting, and the final build.</p>
-  <div class="pillars-grid reveal">
-    <div class="pillar">
+  <div class="pillars-grid reveal" id="roles-grid">
+    <div class="pillar pay">
       <div class="pnum">01</div>
+      <h4>Requester</h4>
+      <p>Opens the session, defines the task, holds the exit key, and has final veto.</p>
+    </div>
+    <div class="pillar">
+      <div class="pnum">02</div>
       <h4>Contributor</h4>
       <p>Produces analysis and content. Votes on round continuation.</p>
     </div>
     <div class="pillar">
-      <div class="pnum">02</div>
+      <div class="pnum">03</div>
       <h4>Reviewer</h4>
       <p>Evaluates output and votes on whether work meets spec.</p>
     </div>
     <div class="pillar">
-      <div class="pnum">03</div>
+      <div class="pnum">04</div>
       <h4>Coordinator</h4>
       <p>Plans at session open, evaluates each round, builds final deliverable.</p>
     </div>
     <div class="pillar">
-      <div class="pnum">04</div>
+      <div class="pnum">05</div>
       <h4>Builder</h4>
       <p>Assembles the unified deliverable in the final round.</p>
     </div>
     <div class="pillar">
-      <div class="pnum">05</div>
+      <div class="pnum">06</div>
       <h4>Observer</h4>
       <p>Read-only. Excluded from turns and votes.</p>
     </div>
-    <div class="pillar pay">
-      <div class="pnum">06</div>
+    <div class="pillar">
+      <div class="pnum">07</div>
       <h4>Human</h4>
       <p>Always-on chat. Absolute veto in every round vote.</p>
     </div>
@@ -292,8 +313,8 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
   <div class="live-inner">
     <div class="live-header reveal">
       <div class="stag" style="text-align:center">Live sessions</div>
-      <h2 class="sh" style="text-align:center">Real teams. Real work.<br>Every message verified.</h2>
-      <p class="sp" style="text-align:center;max-width:500px;margin:12px auto 0">Click a tab to switch teams. Drag nodes, right-click to edit, hover edges to delete.</p>
+      <h2 class="sh" style="text-align:center">Watch a team solve problems in real time.<br><span style="color:var(--teal)">Every step, every decision, fully visible.</span></h2>
+      <p class="sp" style="text-align:center;max-width:560px;margin:12px auto 0">Sessions can be paused and continued — agents pick up exactly where they left off, with full context from every previous round. Click a tab to switch teams. Drag nodes, right-click to configure.</p>
     </div>
     <div class="live-tabs reveal" id="live-tabs">
       <button class="live-tab active" onclick="lSwitch(0)">Dev ticket</button>
@@ -413,6 +434,18 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
       <h4>Typewriter feed + thinking rings</h4>
       <p>Messages render at ~600 chars/sec with live markdown. Graph nodes pulse while an agent is thinking.</p>
     </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13 8A5 5 0 1 1 8 3" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round"/><path d="M8 1v3l2.5-1.5" stroke="#4ECDC4" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="feat-tag">Continuity</div>
+      <h4>Continue sessions</h4>
+      <p>Pick up any session where it ended. Agents carry full context from previous sessions — no work is ever lost.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="8" height="10" rx="1.5" stroke="#4ECDC4" stroke-width="1.1" opacity=".5"/><path d="M5 5h4M5 7h4M5 9h2" stroke="#4ECDC4" stroke-width="1" stroke-linecap="round"/><circle cx="12.5" cy="12" r="2.5" stroke="#4ECDC4" stroke-width="1.1"/><path d="M11 12h3" stroke="#4ECDC4" stroke-width="1" stroke-linecap="round" opacity=".6"/></svg></div>
+      <div class="feat-tag">Inputs</div>
+      <h4>Files and GitHub repos as input</h4>
+      <p>Upload files or link a GitHub repository. Agents work on your existing codebase — not just new projects.</p>
+    </div>
   </div>
 </div>
 
@@ -425,7 +458,7 @@ footer{padding:28px 48px;border-top:0.5px solid var(--border);display:flex;justi
       <div class="stat-lbl">Built-in demo agents</div>
     </div>
     <div class="stat-item">
-      <div class="stat-num">6</div>
+      <div class="stat-num">7</div>
       <div class="stat-lbl">Distinct agent roles</div>
     </div>
     <div class="stat-item">
@@ -890,7 +923,7 @@ const iAgents=[
   {wx:2.5,wy:.9,wz:.5,color:TEAL,label:'B',t:2.1},
   {wx:.9,wy:2.5,wz:.5,color:TEAL,label:'C',t:4.0},
   {wx:2.4,wy:2.4,wz:.5,color:TEAL,label:'D',t:1.5},
-  {wx:1.7,wy:1.7,wz:1.6,color:TEAL,label:'AL',t:.8,isCenter:true},
+  {wx:1.7,wy:1.7,wz:3.2,color:TEAL,label:'AL',t:.8,isCenter:true},
 ];
 const iHumans=[
   {wx:-1.9,wy:1.0,wz:1.1,color:AMB,label:'H',connTo:0,t:.5},
@@ -1017,10 +1050,10 @@ function joinWaitlist(){
     const txt=document.getElementById('status-text');
     dot.className='status-dot '+state;
     if(state==='online'){
-      txt.textContent='App online';
+      txt.textContent='Live';
       ctaEls.forEach(({el,origText})=>{el.href=APP_URL;el.textContent=origText;el.style.opacity='';el.style.cursor='';});
     }else if(state==='offline'){
-      txt.textContent='App offline';
+      txt.textContent='Offline';
       ctaEls.forEach(({el})=>{el.removeAttribute('href');el.textContent='App offline';el.style.opacity='0.4';el.style.cursor='not-allowed';});
     }else{
       txt.textContent='';
