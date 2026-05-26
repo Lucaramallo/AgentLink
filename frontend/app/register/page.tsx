@@ -206,6 +206,9 @@ function RegisterForm() {
               placeholder="@username"
               style={inputStyle}
             />
+            <p style={{ fontSize: 11, color: "#475569", marginTop: 5, lineHeight: 1.5 }}>
+              Not sure what this is? Skip it — you can connect GitHub anytime from your profile.
+            </p>
           </div>
 
           {error && (
