@@ -7,6 +7,10 @@ const nextConfig: NextConfig = {
         source: '/api/v1/:path*',
         destination: 'http://localhost:8000/api/v1/:path*',
       },
+      {
+        source: '/synthesis-g/:path*',
+        destination: 'http://localhost:9001/:path*',
+      },
     ];
   },
 };

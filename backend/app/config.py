@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     max_messages_per_minute: int = 60
     # Anthropic
     anthropic_api_key: str = ""
+    gemini_api_key: str = ""
     # GitHub OAuth
     github_client_id: str = ""
     github_client_secret: str = ""
