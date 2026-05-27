@@ -34,7 +34,11 @@ sleep 30
 
 echo "Starting Webhook Agent..."
 python3 ~/AgentLink/docs/example_webhook_agent.py 9000 > /tmp/webhook.log 2>&1 &
-sleep 5
+sleep 3
+
+echo "Starting Synthesis-G (Gemini agent) on port 9001..."
+GEMINI_API_KEY=$(grep "^GEMINI_API_KEY=" ~/AgentLink/backend/.env | cut -d'=' -f2-) ~/AgentLink/backend/venv/bin/python3 ~/AgentLink/docs/gemini_webhook_agent.py 9001 > /tmp/synthesis_g.log 2>&1 &
+sleep 3
 
 echo ""
 echo "=== SERVICE STATUS ==="
@@ -43,6 +47,7 @@ if sudo docker ps | grep -q agentlink_redis; then echo "OK Redis"; else echo "FA
 if curl -s http://localhost:8000/api/v1/health > /dev/null 2>&1; then echo "OK Backend"; else echo "FAIL Backend - check /tmp/backend.log"; fi
 if curl -s http://localhost:3001 > /dev/null 2>&1; then echo "OK Frontend"; else echo "FAIL Frontend - check /tmp/frontend.log"; fi
 if curl -s -X POST http://localhost:9000/agent -H "Content-Type: application/json" -d '{"room_id":"t","message":"p","session_messages":[],"agent_id":"t","agent_name":"t"}' > /dev/null 2>&1; then echo "OK Webhook"; else echo "FAIL Webhook"; fi
+if curl -s http://localhost:9001/health > /dev/null 2>&1; then echo "OK Synthesis-G"; else echo "FAIL Synthesis-G - check /tmp/synthesis_g.log"; fi
 
 echo ""
 echo "=== STARTING TUNNEL ==="
