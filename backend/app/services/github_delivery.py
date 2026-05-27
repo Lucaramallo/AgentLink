@@ -27,9 +27,15 @@ def _b64(content: str) -> str:
     return base64.b64encode(content.encode()).decode()
 
 
-_CODE_FENCE_RE = re.compile(r"```([^\n]*)\n(.*?)```", re.DOTALL)
+_CODE_FENCE_RE = re.compile(r"^```([^\n]*)\n(.*?)^```[ \t]*$", re.DOTALL | re.MULTILINE)
 
 _EXT = r"py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md|vue|go|rs|java|cpp|c"
+
+# Matches "## FILE 1: filename.ext" (any depth ##, any digit)
+_FILE_HEADER_RE = re.compile(
+    rf"^##+ FILE \d+\s*:\s*([A-Za-z0-9_\-./]+\.(?:{_EXT}))\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # Tried in order against each preceding line; first match wins.
 _FILENAME_PATTERNS: list[re.Pattern] = [
@@ -85,15 +91,57 @@ def _extract_named_files(content: str) -> list[tuple[str, str]]:
         content[:200],
     )
     files: dict[str, str] = {}
+
+    # Fast path: explicit "## FILE N: filename.ext" headers.
+    # Slice the content between consecutive headers and grab the first fence in each slice.
+    file_headers = list(_FILE_HEADER_RE.finditer(content))
+    logger.info(
+        "_extract_named_files: found %d FILE headers: %s",
+        len(file_headers),
+        [hdr.group(1) for hdr in file_headers],
+    )
+    if file_headers:
+        for i, hdr in enumerate(file_headers):
+            filename = hdr.group(1)
+            section_start = hdr.end()
+            section_end = file_headers[i + 1].start() if i + 1 < len(file_headers) else len(content)
+            section = content[section_start:section_end]
+            logger.info(
+                "_extract_named_files: section for %r: len=%d, preview=%r",
+                filename,
+                len(section),
+                section[:80],
+            )
+            fence_m = _CODE_FENCE_RE.search(section)
+            if fence_m:
+                files[filename] = fence_m.group(2).rstrip("\n")
+                logger.info(
+                    "_extract_named_files: extracted %r (%d chars)",
+                    filename,
+                    len(files[filename]),
+                )
+            else:
+                logger.warning(
+                    "_extract_named_files: no code fence found in section for %r",
+                    filename,
+                )
+        if files:
+            result = list(files.items())
+            logger.info(
+                "_extract_named_files: returning %d files: %s",
+                len(result),
+                [f for f, _ in result],
+            )
+            return result
+
+    # Fallback: look-back approach for deliverables that use other header conventions.
     content_lines = content.split("\n")
     fence_matches = list(_CODE_FENCE_RE.finditer(content))
 
     for m in fence_matches:
-        lang = m.group(1).strip().lower()
         body = m.group(2)
         fence_start_line = content[: m.start()].count("\n")
 
-        # Look back through up to 3 non-empty lines before this fence.
         found: str | None = None
         non_empty_seen = 0
         for i in range(fence_start_line - 1, max(-1, fence_start_line - 30), -1):
