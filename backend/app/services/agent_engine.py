@@ -274,6 +274,11 @@ def build_role_system_prompt(
                 f"{rn_context}"
             )
         instructions = (
+            "You are the Builder. Your job is to ASSEMBLE the complete final deliverable by combining ALL files "
+            "produced by ALL agents in this session. Do NOT deliver only your own contribution. Collect every file "
+            "from every agent's contribution and deliver them ALL together using the ## FILE N: filename.ext format. "
+            "If the task requires index.html, style.css, and app.js — deliver all three, even if other agents wrote them. "
+            "The final deliverable must be complete and standalone.\n\n"
             "In this final round you are acting exclusively as the Builder. "
             "Your Contributor role is suspended. "
             "Your ONLY job is to assemble the final deliverable using all the summaries and context provided. "
@@ -357,6 +362,11 @@ def build_role_system_prompt(
                     f"{rn_context}"
                 )
             instructions = (
+                "You are the Builder. Your job is to ASSEMBLE the complete final deliverable by combining ALL files "
+                "produced by ALL agents in this session. Do NOT deliver only your own contribution. Collect every file "
+                "from every agent's contribution and deliver them ALL together using the ## FILE N: filename.ext format. "
+                "If the task requires index.html, style.css, and app.js — deliver all three, even if other agents wrote them. "
+                "The final deliverable must be complete and standalone.\n\n"
                 "You are the BUILDER. This is the FINAL ROUND. "
                 "Your job is to assemble the final deliverable using your specialty. "
                 "Use all Contributor summaries and Reviewer assessments provided below. "
