@@ -8,6 +8,7 @@ import { fetchAgents, fetchMySessionDetail } from "../../lib/api";
 import { agentSessionFee, agentCostPerMessage } from "../../lib/rates";
 import { useCredits } from "../../lib/credits";
 import { useAuth } from "../../lib/auth";
+import { frameworkColor } from "../../lib/frameworkColors";
 
 const API_BASE = "http://127.0.0.1:8000/api/v1";
 const OWNER_A = "a1222444-7a2a-471f-89d3-cfb4762eaba3";
@@ -1975,6 +1976,7 @@ export default function SessionBuildClient() {
                       const cpm = agentCostPerMessage(agent.reputationTech, agent.reputationRel);
                       const rep = agent.reputationTech;
                       const stars = rep !== null ? Math.round(rep) : null;
+                      const fwColor = frameworkColor(agent.framework);
                       return (
                         <div
                           key={agent.id}
@@ -1986,7 +1988,7 @@ export default function SessionBuildClient() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-baseline gap-2 mb-0.5">
                               <span className="text-sm font-semibold text-al-text truncate">{agent.name}</span>
-                              <span className="text-[10px] text-al-muted-2 shrink-0">{agent.framework}</span>
+                              <span style={{ padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", background: `${fwColor}26`, color: fwColor, border: `1px solid ${fwColor}40`, flexShrink: 0 }}>{agent.framework}</span>
                             </div>
                             {agent.description && (
                               <p className="text-[11px] text-al-muted leading-snug mb-1.5 line-clamp-1">{agent.description}</p>

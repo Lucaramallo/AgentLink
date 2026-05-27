@@ -3,6 +3,7 @@
 import type { Agent } from "../lib/types";
 import { agentSessionFee, agentCostPerMessage } from "../lib/rates";
 import SkillTag from "./SkillTag";
+import { frameworkColor } from "../lib/frameworkColors";
 
 interface AgentCardProps {
   agent: Agent;
@@ -40,15 +41,20 @@ function RepScore({ label, value }: { label: string; value: number | null }) {
 }
 
 function FrameworkBadge({ framework }: { framework: string }) {
-  const colors: Record<string, string> = {
-    Claude: "bg-violet-500/10 text-violet-400 border-violet-500/20",
-    LangChain: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    AutoGen: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    Custom: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-  };
-  const cls = colors[framework] ?? "bg-al-border/40 text-al-muted-2 border-al-border";
+  const color = frameworkColor(framework);
   return (
-    <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border ${cls}`}>
+    <span style={{
+      display: "inline-block",
+      padding: "1px 6px",
+      borderRadius: 4,
+      fontSize: 9,
+      fontWeight: 700,
+      textTransform: "uppercase",
+      letterSpacing: "0.06em",
+      background: `${color}26`,
+      color,
+      border: `1px solid ${color}40`,
+    }}>
       {framework}
     </span>
   );

@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../lib/auth";
+import { frameworkColor } from "../lib/frameworkColors";
 import {
   fetchMyStats,
   fetchMyAgents,
@@ -678,7 +679,7 @@ export default function AdminClient() {
                   borderRadius: 8, padding: "8px 12px", color: "#E2E8F0", fontSize: 13,
                 }}
               >
-                {["claude", "langchain", "autogen", "custom"].map(fw => (
+                {["Google Gemini", "Anthropic Claude", "OpenAI", "Mistral", "Ollama", "claude", "langchain", "autogen", "custom"].map(fw => (
                   <option key={fw} value={fw}>{fw}</option>
                 ))}
               </select>
@@ -985,6 +986,7 @@ export default function AdminClient() {
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {agents.map(a => {
                   const s = agentStatus(a);
+                  const fwColor = frameworkColor(a.framework);
                   return (
                     <div key={a.agent_id} style={{
                       background: "#0D1421", border: "1px solid #1E2D4A", borderRadius: 10,
@@ -992,7 +994,10 @@ export default function AdminClient() {
                     }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 600 }}>{a.name}</div>
-                        <div style={{ color: "#64748B", fontSize: 12 }}>{a.framework} · {a.skills.slice(0, 3).join(", ")}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
+                          <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: `${fwColor}26`, color: fwColor, border: `1px solid ${fwColor}40` }}>{a.framework}</span>
+                          <span style={{ color: "#64748B", fontSize: 12 }}>{a.skills.slice(0, 3).join(", ")}</span>
+                        </div>
                       </div>
                       <span style={{ fontSize: 12, color: s.color, background: `${s.color}20`, padding: "3px 10px", borderRadius: 20 }}>{s.label}</span>
                       <div style={{ textAlign: "right" }}>
@@ -1055,11 +1060,14 @@ export default function AdminClient() {
                 <tbody>
                   {filteredAgents.map(a => {
                     const s = agentStatus(a);
+                    const fwColor = frameworkColor(a.framework);
                     return (
                       <tr key={a.agent_id} style={{ borderBottom: "1px solid #111827" }}>
                         <td style={{ padding: "12px 12px" }}>
                           <div style={{ fontWeight: 600 }}>{a.name}</div>
-                          <div style={{ color: "#64748B", fontSize: 11 }}>{a.framework}</div>
+                          <div style={{ marginTop: 2 }}>
+                            <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: `${fwColor}26`, color: fwColor, border: `1px solid ${fwColor}40` }}>{a.framework}</span>
+                          </div>
                           {(a.webhook_failures_count ?? 0) > 0 && (
                             <div style={{ color: "#F59E0B", fontSize: 10, marginTop: 2 }}>
                               {a.webhook_failures_count} webhook failure{a.webhook_failures_count === 1 ? "" : "s"}
