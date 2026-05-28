@@ -25,7 +25,7 @@ const ROLE_COLOR: Record<SessionRole, string> = {
 const HUMAN_COLOR = "#F0A500";
 
 // UI message type labels (superset of backend enum)
-type MessageType   = "TASK" | "DELIVERABLE" | "VERIFYING" | "EXIT KEY" | "SYSTEM" | "R1" | "R2" | "R3" | "POLL_EVENT";
+type MessageType   = "TASK" | "DELIVERABLE" | "VERIFYING" | "EXIT KEY" | "SYSTEM" | "R1" | "R2" | "R3" | "POLL_EVENT" | "QA";
 type SessionStatus = "OPEN" | "VERIFYING" | "CLOSED_SUCCESS" | "CLOSED_DISPUTED";
 
 // Map UI type → backend MessageType enum value
@@ -39,6 +39,7 @@ const BACKEND_TYPE: Record<MessageType, string> = {
   R2:          "TASK",
   R3:          "TASK",
   POLL_EVENT:  "POLL_EVENT",
+  QA:          "TASK",
 };
 
 // Map backend RoomStatus → UI SessionStatus
@@ -60,6 +61,7 @@ const MSG_COLOR: Record<MessageType, { bg: string; text: string; border: string 
   R2:          { bg: "rgba(234,179,8,0.12)",   text: "#EAB308", border: "rgba(234,179,8,0.35)"   },
   R3:          { bg: "rgba(249,115,22,0.12)",  text: "#FB923C", border: "rgba(249,115,22,0.35)"  },
   POLL_EVENT:  { bg: "rgba(168,85,247,0.12)", text: "#A855F7", border: "rgba(168,85,247,0.35)"  },
+  QA:          { bg: "rgba(251,191,36,0.12)",  text: "#FBBF24", border: "rgba(251,191,36,0.35)"  },
 };
 
 const STATUS_STEP: Record<SessionStatus, number> = {
@@ -1987,6 +1989,57 @@ export default function SessionRoomClient() {
     }
     if (jumpToFinal) {
       addSystemMsg("Vote result: proceeding directly to final round.");
+    }
+
+    // ── QA ROUND: Mandatory pre-delivery review ────────────────────────────────
+    // Always runs: Reviewers → Coordinators → Contributors (all non-observer, non-human)
+    addSystemMsg("QA Round — Pre-delivery review");
+    const qaOrder: GraphNode[] = [
+      ...agents.filter((n) => n.role === "Reviewer"),
+      ...coordinators,
+      ...agents.filter((n) => n.role !== "Reviewer"),
+    ];
+
+    const qaPrompt =
+      `## QUALITY ASSURANCE ROUND — Pre-delivery review\n\n` +
+      `Original task: ${humanText}\n\n` +
+      `Review ALL contributions made so far in this session. Your job is to:\n` +
+      `1. Verify the original task requirements are fully met\n` +
+      `2. Identify any missing files, incomplete sections, or gaps\n` +
+      `3. Flag anything that needs to be completed before final delivery\n\n` +
+      `If everything is complete: respond "QA PASS — ready for delivery"\n` +
+      `If something is missing: clearly state what is incomplete and what needs to be added`;
+
+    const qaMsgs: Message[] = [];
+    if (qaOrder.length > 0) {
+      // Reset display states for the QA round
+      setAgentDisplayStates((prev) => {
+        const next = { ...prev };
+        for (const a of qaOrder) next[a.id] = "idle";
+        return next;
+      });
+      for (const a of qaOrder) postRoundState(a.id, "PENDING", maxRounds);
+
+      for (const agent of qaOrder) {
+        setDisplayState(agent.id, "thinking");
+        setCurrentSpeaker({ name: agent.label, round: "QA Round" });
+        postRoundState(agent.id, "THINKING", maxRounds);
+
+        const qaMsg = await callAgent(
+          agent,
+          qaPrompt,
+          getVisibleContext(agent, [...allMessages, ...qaMsgs], "QA"),
+          "QA",
+        );
+
+        const qads: AgentDisplayState = qaMsg ? "responded" : "skipped";
+        setDisplayState(agent.id, qads);
+        setCurrentSpeaker(null);
+        postRoundState(agent.id, qaMsg ? "RESPONDED" : "SKIPPED", maxRounds);
+
+        if (qaMsg) qaMsgs.push(qaMsg);
+      }
+      allMessages = [...allMessages, ...qaMsgs];
     }
 
     // ── Final round: summaries → Builder assembles deliverable ────────────────

@@ -1304,7 +1304,7 @@ export default function SessionBuildClient() {
   function computeSessionCost(): number {
     const billable = nodes.filter((n) => !n.isHuman);
     const fixedCosts = billable.reduce((s, n) => s + agentSessionFee(n.agent.reputationTech, n.agent.reputationRel), 0);
-    const variableCosts = billable.reduce((s, n) => s + agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel) * maxRevisions, 0);
+    const variableCosts = billable.reduce((s, n) => s + agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel) * (maxRevisions + 1), 0);
     const maximum = fixedCosts + variableCosts;
     const fee = Math.round(maximum * 0.03 * 10) / 10;
     return Math.round((maximum + fee) * 10) / 10;
@@ -2288,7 +2288,7 @@ export default function SessionBuildClient() {
                 costPerMsg: agentCostPerMessage(n.agent.reputationTech, n.agent.reputationRel),
               }));
               const fixedTotal = lineItems.reduce((s, l) => s + l.sessionFee, 0);
-              const variableTotal = lineItems.reduce((s, l) => s + l.costPerMsg * maxRevisions, 0);
+              const variableTotal = lineItems.reduce((s, l) => s + l.costPerMsg * (maxRevisions + 1), 0);
               const maximum = fixedTotal + variableTotal;
               const alcFee = Math.round(maximum * 0.03 * 10) / 10;
               const grandTotal = Math.round((maximum + alcFee) * 10) / 10;
@@ -2321,13 +2321,13 @@ export default function SessionBuildClient() {
                     </div>
                     {/* Variable costs */}
                     <div className="border-t border-amber-400/10 px-3 pt-2 pb-1">
-                      <p className="text-[9px] text-al-muted uppercase tracking-wider mb-1.5">Variable costs (max {maxRevisions} rounds)</p>
+                      <p className="text-[9px] text-al-muted uppercase tracking-wider mb-1.5">Variable costs ({maxRevisions} work rounds + 1 QA round)</p>
                       <div className="space-y-1">
                         {lineItems.map((item) => (
                           <div key={item.name} className="flex items-center justify-between">
                             <span className="text-[11px] text-al-muted-2 truncate max-w-[130px]">{item.name}</span>
                             <span className="text-[11px] text-al-text tabular-nums">
-                              {item.costPerMsg}×{maxRevisions} = {item.costPerMsg * maxRevisions} ALC
+                              {item.costPerMsg}×{maxRevisions + 1} = {item.costPerMsg * (maxRevisions + 1)} ALC
                             </span>
                           </div>
                         ))}
