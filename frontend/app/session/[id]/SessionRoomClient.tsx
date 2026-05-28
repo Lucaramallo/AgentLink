@@ -1304,7 +1304,7 @@ export default function SessionRoomClient() {
           deliverable_content: allDeliverableContent,
           session_log: sessionLog,
           agents_contributions: agentsContributions,
-          session_messages: messagesRef.current.map((m) => ({ type: m.type, content: m.content })),
+          session_messages: messagesRef.current.map((m) => ({ agentName: m.agentName, type: m.type, content: m.content, timestamp: m.ts })),
           ...((repoOverride ?? sessionGithubRepo) ? { github_repo_url: repoOverride ?? sessionGithubRepo } : {}),
         }),
       });
@@ -2750,16 +2750,15 @@ export default function SessionRoomClient() {
     }
 
     // Scan all message types in priority order: R1 (lowest) → R2 → R3 → DELIVERABLE (highest).
-    // Later types override earlier ones for the same filename.
+    // Process each message individually — last occurrence of each filename wins within a type,
+    // and later types override earlier ones. Mirrors deliver_to_github() exactly.
     const namedFiles: Record<string, string> = {};
     for (const msgType of ["R1", "R2", "R3", "DELIVERABLE"] as const) {
-      const typeContent = messages
-        .filter((m) => m.type === msgType)
-        .map((m) => m.content)
-        .join("\n\n---\n\n");
-      if (!typeContent) continue;
-      const extracted = extractFromContent(typeContent);
-      Object.assign(namedFiles, extracted);
+      for (const msg of messages) {
+        if (msg.type !== msgType) continue;
+        const extracted = extractFromContent(msg.content);
+        Object.assign(namedFiles, extracted);
+      }
     }
 
     if (Object.keys(namedFiles).length === 0) {

@@ -217,14 +217,24 @@ async def deliver_to_github(
     )
 
     # Scan messages by priority: R1 (lowest) → R2 → R3 → DELIVERABLE (highest).
-    # Later types override earlier ones for the same filename.
+    # Process each message individually — last occurrence of each filename wins within a type,
+    # and later types override earlier ones. Mirrors downloadZip() exactly.
     merged: dict[str, str] = {}
     if session_messages:
         for msg_type in ("R1", "R2", "R3", "DELIVERABLE"):
             for msg in session_messages:
                 if msg.get("type") == msg_type:
-                    for filename, file_content in _extract_named_files(msg.get("content", "")):
+                    extracted = _extract_named_files(msg.get("content", ""))
+                    for filename, file_content in extracted:
                         merged[filename] = file_content
+                    if extracted:
+                        logger.info(
+                            "deliver_to_github: extracted %d file(s) from type=%s agent=%s: %s",
+                            len(extracted),
+                            msg_type,
+                            msg.get("agentName", "unknown"),
+                            [f for f, _ in extracted],
+                        )
     else:
         for filename, file_content in _extract_named_files(deliverable_content):
             merged[filename] = file_content
