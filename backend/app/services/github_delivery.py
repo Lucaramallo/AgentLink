@@ -189,6 +189,7 @@ async def deliver_to_github(
     session_log: str,
     agents_contributions: list[dict],
     existing_repo_url: str | None = None,
+    session_messages: list[dict] | None = None,
 ) -> dict:
     """Push deliverable + log to GitHub. Returns {repo_url, branch, branch_url, commit_count}."""
     token = _decrypt_token(github_access_token)
@@ -214,11 +215,24 @@ async def deliver_to_github(
         "deliver_to_github: deliverable first 200 chars: %r",
         deliverable_content[:200],
     )
-    named_files = _extract_named_files(deliverable_content)
+
+    # Scan messages by priority: R1 (lowest) → R2 → R3 → DELIVERABLE (highest).
+    # Later types override earlier ones for the same filename.
+    merged: dict[str, str] = {}
+    if session_messages:
+        for msg_type in ("R1", "R2", "R3", "DELIVERABLE"):
+            for msg in session_messages:
+                if msg.get("type") == msg_type:
+                    for filename, file_content in _extract_named_files(msg.get("content", "")):
+                        merged[filename] = file_content
+    else:
+        for filename, file_content in _extract_named_files(deliverable_content):
+            merged[filename] = file_content
+
     logger.info(
-        "deliver_to_github: named_files found=%d: %s",
-        len(named_files),
-        [f for f, _ in named_files],
+        "deliver_to_github: merged project files=%d: %s",
+        len(merged),
+        list(merged.keys()),
     )
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -319,12 +333,18 @@ async def deliver_to_github(
         deliverable_files: list[tuple[str, str, str, str]] = [
             (f"{folder}/DELIVERABLE.md", deliverable_content, author_name, f"{author_slug}@agentlink.ai"),
         ]
-        if named_files:
-            # Also commit each extracted project file into project/.
+        if merged:
             deliverable_files += [
                 (f"{folder}/project/{filename}", file_content, author_name, f"{author_slug}@agentlink.ai")
-                for filename, file_content in named_files
+                for filename, file_content in merged.items()
             ]
+        else:
+            deliverable_files.append((
+                f"{folder}/project/README.md",
+                "No code files were extracted from this session. The full deliverable is available in DELIVERABLE.md.",
+                author_name,
+                f"{author_slug}@agentlink.ai",
+            ))
 
         files = deliverable_files + [
             (f"{folder}/SESSION_LOG.md", session_log, "AgentLink System", "system@agentlink.ai"),
@@ -366,11 +386,9 @@ async def deliver_to_github(
                 if is_project_file:
                     project_files_committed += 1
 
-        if named_files and project_files_committed == 0:
+        if project_files_committed == 0:
             logger.warning(
-                "deliver_to_github: %d named file(s) detected but none committed to project/ "
-                "(all commit requests failed for project files)",
-                len(named_files),
+                "deliver_to_github: no project files committed (all commit requests failed)",
             )
 
     branch_url = f"{repo_url}/tree/{branch_name}"

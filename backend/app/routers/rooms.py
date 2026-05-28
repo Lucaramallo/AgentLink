@@ -356,6 +356,7 @@ class DeliverGitHubPayload(BaseModel):
     session_log: str
     agents_contributions: list[dict]
     github_repo_url: str | None = None
+    session_messages: list[dict] = []
 
 
 @router.post("/{room_id}/deliver-github")
@@ -384,6 +385,7 @@ async def deliver_github(
             session_log=payload.session_log,
             agents_contributions=payload.agents_contributions,
             existing_repo_url=existing_repo_url,
+            session_messages=payload.session_messages or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

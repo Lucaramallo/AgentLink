@@ -1302,6 +1302,7 @@ export default function SessionRoomClient() {
           deliverable_content: allDeliverableContent,
           session_log: sessionLog,
           agents_contributions: agentsContributions,
+          session_messages: messagesRef.current.map((m) => ({ type: m.type, content: m.content })),
           ...((repoOverride ?? sessionGithubRepo) ? { github_repo_url: repoOverride ?? sessionGithubRepo } : {}),
         }),
       });
@@ -2620,14 +2621,8 @@ export default function SessionRoomClient() {
     };
     const zip = new JSZipCtor();
 
-    // Extract named files from all DELIVERABLE messages (mirrors backend _extract_named_files)
-    const allDeliverableContent = messages
-      .filter((m) => m.type === "DELIVERABLE")
-      .map((m) => m.content)
-      .join("\n\n---\n\n");
-
     const _EXT = "py|html?|jsx?|tsx?|css|json|ya?ml|sh|txt|md|vue|go|rs|java|cpp|c";
-    const CODE_FENCE_RE = new RegExp("```([^\\n]*)\\n([\\s\\S]*?)```", "g");
+    const FILE_HEADERS_RE = new RegExp(`^##+ FILE \\d+\\s*:\\s*([A-Za-z0-9_\\-./]+\\.(?:${_EXT}))\\b`, "gim");
     const FILENAME_PATTERNS = [
       new RegExp(`\\*{1,2}([A-Za-z0-9_\\-./]+\\.(?:${_EXT}))\\*{1,2}`, "i"),
       new RegExp(`\\b(?:file(?:name)?|path)\\s*:\\s*\`?([A-Za-z0-9_\\-./]+\\.(?:${_EXT}))\`?\\b`, "i"),
@@ -2645,41 +2640,88 @@ export default function SessionRoomClient() {
       java: "Main.java", cpp: "main.cpp", c: "main.c",
       vue: "App.vue", markdown: "README.md", md: "README.md",
     };
-    const namedFiles: Record<string, string> = {};
-    const allLines = allDeliverableContent.split("\n");
-    const fenceMatches: Array<{ startLine: number; lang: string; body: string }> = [];
-    let fm: RegExpExecArray | null;
-    while ((fm = CODE_FENCE_RE.exec(allDeliverableContent)) !== null) {
-      fenceMatches.push({
-        startLine: allDeliverableContent.slice(0, fm.index).split("\n").length - 1,
-        lang: fm[1].trim().toLowerCase(),
-        body: fm[2],
-      });
-    }
-    for (const fence of fenceMatches) {
-      let found: string | null = null;
-      let nonEmptySeen = 0;
-      for (let i = fence.startLine - 1; i >= Math.max(0, fence.startLine - 30); i--) {
-        const line = allLines[i]?.trim() ?? "";
-        if (!line) continue;
-        nonEmptySeen++;
-        if (nonEmptySeen > 3) break;
-        for (const pat of FILENAME_PATTERNS) {
-          const hit = pat.exec(line);
-          if (hit) { found = hit[1]; break; }
+
+    function extractFromContent(text: string): Record<string, string> {
+      const result: Record<string, string> = {};
+      const CODE_FENCE_RE = new RegExp("```([^\\n]*)\\n([\\s\\S]*?)```", "g");
+
+      // Fast path: explicit "## FILE N: filename.ext" headers
+      const headerMatches = [...text.matchAll(FILE_HEADERS_RE)];
+      if (headerMatches.length > 0) {
+        for (let i = 0; i < headerMatches.length; i++) {
+          const hdr = headerMatches[i];
+          const filename = hdr[1];
+          const sectionStart = (hdr.index ?? 0) + hdr[0].length;
+          const sectionEnd = i + 1 < headerMatches.length ? (headerMatches[i + 1].index ?? text.length) : text.length;
+          const section = text.slice(sectionStart, sectionEnd);
+          const fence = CODE_FENCE_RE.exec(section);
+          CODE_FENCE_RE.lastIndex = 0;
+          if (fence) result[filename] = fence[2].replace(/\n$/, "");
         }
-        if (found) break;
+        if (Object.keys(result).length > 0) return result;
       }
-      if (found) namedFiles[found] = fence.body.replace(/\n$/, "");
+
+      // Fallback: look-back approach
+      const allLines = text.split("\n");
+      const fenceMatches: Array<{ startLine: number; lang: string; body: string }> = [];
+      let fm: RegExpExecArray | null;
+      while ((fm = CODE_FENCE_RE.exec(text)) !== null) {
+        fenceMatches.push({
+          startLine: text.slice(0, fm.index).split("\n").length - 1,
+          lang: fm[1].trim().toLowerCase(),
+          body: fm[2],
+        });
+      }
+      for (const fence of fenceMatches) {
+        let found: string | null = null;
+        let nonEmptySeen = 0;
+        for (let i = fence.startLine - 1; i >= Math.max(0, fence.startLine - 30); i--) {
+          const line = allLines[i]?.trim() ?? "";
+          if (!line) continue;
+          nonEmptySeen++;
+          if (nonEmptySeen > 3) break;
+          for (const pat of FILENAME_PATTERNS) {
+            const hit = pat.exec(line);
+            if (hit) { found = hit[1]; break; }
+          }
+          if (found) break;
+        }
+        if (found) result[found] = fence.body.replace(/\n$/, "");
+      }
+      // Single-block fallback: infer filename from language tag.
+      if (Object.keys(result).length === 0 && fenceMatches.length === 1) {
+        const inferred = LANG_TO_FILENAME[fenceMatches[0].lang];
+        if (inferred) result[inferred] = fenceMatches[0].body.replace(/\n$/, "");
+      }
+      return result;
     }
-    // Single-block fallback: infer filename from language tag.
-    if (Object.keys(namedFiles).length === 0 && fenceMatches.length === 1) {
-      const inferred = LANG_TO_FILENAME[fenceMatches[0].lang];
-      if (inferred) namedFiles[inferred] = fenceMatches[0].body.replace(/\n$/, "");
+
+    // Scan all message types in priority order: R1 (lowest) → R2 → R3 → DELIVERABLE (highest).
+    // Later types override earlier ones for the same filename.
+    const namedFiles: Record<string, string> = {};
+    for (const msgType of ["R1", "R2", "R3", "DELIVERABLE"] as const) {
+      const typeContent = messages
+        .filter((m) => m.type === msgType)
+        .map((m) => m.content)
+        .join("\n\n---\n\n");
+      if (!typeContent) continue;
+      const extracted = extractFromContent(typeContent);
+      Object.assign(namedFiles, extracted);
     }
-    for (const [filename, content] of Object.entries(namedFiles)) {
-      zip.file(`project/${filename}`, content);
+
+    if (Object.keys(namedFiles).length === 0) {
+      zip.file("project/README.md", "No code files were extracted from this session. The full deliverable is available in DELIVERABLE.md.");
+    } else {
+      for (const [filename, content] of Object.entries(namedFiles)) {
+        zip.file(`project/${filename}`, content);
+      }
     }
+
+    // DELIVERABLE.md content (used below)
+    const allDeliverableContent = messages
+      .filter((m) => m.type === "DELIVERABLE")
+      .map((m) => m.content)
+      .join("\n\n---\n\n");
 
     // Contributions per agent — one file per agent, all round messages concatenated
     const agentContribs: Record<string, string[]> = {};
