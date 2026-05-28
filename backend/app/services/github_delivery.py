@@ -85,6 +85,7 @@ def _find_filename_in_line(line: str) -> str | None:
 
 def _extract_named_files(content: str) -> list[tuple[str, str]]:
     """Return [(filename, file_content), ...] if named code blocks found, else []."""
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     logger.info(
         "_extract_named_files: content len=%d, first 200 chars: %r",
         len(content),
