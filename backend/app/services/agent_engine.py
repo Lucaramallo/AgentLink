@@ -274,6 +274,9 @@ def build_role_system_prompt(
                 f"{rn_context}"
             )
         instructions = (
+            "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+            "Collect every piece of code, design spec, and implementation detail that was produced. "
+            "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
             "You are the Builder. Your job is to ASSEMBLE the complete final deliverable by combining ALL files "
             "produced by ALL agents in this session. Do NOT deliver only your own contribution. Collect every file "
             "from every agent's contribution and deliver them ALL together using the ## FILE N: filename.ext format. "
@@ -294,7 +297,19 @@ def build_role_system_prompt(
             "...file content...\n"
             "```\n"
             "Use the actual filenames (e.g. pipeline.py, index.html, app.js). "
-            "If there is only one file, output its content directly without the FILE N: headers."
+            "If there is only one file, output its content directly without the FILE N: headers.\n\n"
+            "When delivering code files, you MUST use this exact format for each file:\n"
+            "## FILE 1: filename.ext\n"
+            "```language\n"
+            "...complete file content...\n"
+            "```\n"
+            "## FILE 2: filename.ext\n"
+            "```language\n"
+            "...complete file content...\n"
+            "```\n"
+            "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+            "Never combine multiple files into one block. "
+            "This format is required — it is how the platform extracts and delivers your project files to the user."
             f"{rn_block}"
         )
 
@@ -309,10 +324,25 @@ def build_role_system_prompt(
             )
         elif is_final:
             instructions = (
+                "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+                "Collect every piece of code, design spec, and implementation detail that was produced. "
+                "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
                 "You are the COORDINATOR. This is the FINAL ROUND. "
                 "Verify that the Builder has produced the correct deliverable. "
                 "Emit a coordination summary: confirm the team met the deliverable spec, "
-                "note any gaps, and close with your assessment. Be concise and authoritative."
+                "note any gaps, and close with your assessment. Be concise and authoritative.\n\n"
+                "When delivering code files, you MUST use this exact format for each file:\n"
+                "## FILE 1: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "## FILE 2: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+                "Never combine multiple files into one block. "
+                "This format is required — it is how the platform extracts and delivers your project files to the user."
             )
         else:
             instructions = (
@@ -325,11 +355,26 @@ def build_role_system_prompt(
     elif r == "contributor":
         if is_final:
             instructions = (
+                "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+                "Collect every piece of code, design spec, and implementation detail that was produced. "
+                "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
                 "You are a CONTRIBUTOR. This is the FINAL ROUND. "
                 "Produce a concise, structured executive summary of your contribution. "
                 "Address it explicitly to the Builder (or the team if no Builder is set). "
                 "Format: key findings, your recommendation, what the Builder needs from you. "
-                "No rambling — clean, structured output only."
+                "No rambling — clean, structured output only.\n\n"
+                "When delivering code files, you MUST use this exact format for each file:\n"
+                "## FILE 1: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "## FILE 2: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+                "Never combine multiple files into one block. "
+                "This format is required — it is how the platform extracts and delivers your project files to the user."
             )
         else:
             instructions = (
@@ -340,11 +385,26 @@ def build_role_system_prompt(
     elif r == "reviewer":
         if is_final:
             instructions = (
+                "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+                "Collect every piece of code, design spec, and implementation detail that was produced. "
+                "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
                 "You are the REVIEWER. This is the FINAL ROUND. "
                 "Deliver a final quality assessment of all contributions before the Builder assembles. "
                 "Do NOT produce content yourself — assess quality, identify gaps, "
                 "flag risks, and confirm whether the work meets the deliverable spec. "
-                "Be specific: name which contributions pass, which need revision, and why."
+                "Be specific: name which contributions pass, which need revision, and why.\n\n"
+                "When delivering code files, you MUST use this exact format for each file:\n"
+                "## FILE 1: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "## FILE 2: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+                "Never combine multiple files into one block. "
+                "This format is required — it is how the platform extracts and delivers your project files to the user."
             )
         else:
             instructions = (
@@ -362,6 +422,9 @@ def build_role_system_prompt(
                     f"{rn_context}"
                 )
             instructions = (
+                "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+                "Collect every piece of code, design spec, and implementation detail that was produced. "
+                "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
                 "You are the Builder. Your job is to ASSEMBLE the complete final deliverable by combining ALL files "
                 "produced by ALL agents in this session. Do NOT deliver only your own contribution. Collect every file "
                 "from every agent's contribution and deliver them ALL together using the ## FILE N: filename.ext format. "
@@ -382,7 +445,19 @@ def build_role_system_prompt(
                 "...file content...\n"
                 "```\n"
                 "Use the actual filenames (e.g. pipeline.py, index.html, app.js). "
-                "If there is only one file, output its content directly without the FILE N: headers."
+                "If there is only one file, output its content directly without the FILE N: headers.\n\n"
+                "When delivering code files, you MUST use this exact format for each file:\n"
+                "## FILE 1: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "## FILE 2: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+                "Never combine multiple files into one block. "
+                "This format is required — it is how the platform extracts and delivers your project files to the user."
                 f"{rn_block}"
             )
         else:
@@ -393,14 +468,57 @@ def build_role_system_prompt(
             )
 
     elif r == "requester":
-        instructions = (
-            "You are the REQUESTER. You go first in each round when you participate. "
-            "You can intervene at any point to clarify requirements, redirect the team, "
-            "or add new constraints. Keep the team accountable to your original request."
-        )
+        if is_final:
+            instructions = (
+                "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+                "Collect every piece of code, design spec, and implementation detail that was produced. "
+                "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
+                "You are the REQUESTER. This is the FINAL ROUND. "
+                "You go first in each round when you participate. "
+                "You can intervene at any point to clarify requirements, redirect the team, "
+                "or add new constraints. Keep the team accountable to your original request.\n\n"
+                "When delivering code files, you MUST use this exact format for each file:\n"
+                "## FILE 1: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "## FILE 2: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+                "Never combine multiple files into one block. "
+                "This format is required — it is how the platform extracts and delivers your project files to the user."
+            )
+        else:
+            instructions = (
+                "You are the REQUESTER. You go first in each round when you participate. "
+                "You can intervene at any point to clarify requirements, redirect the team, "
+                "or add new constraints. Keep the team accountable to your original request."
+            )
 
     else:
-        instructions = f"Participate in Round {round_number} according to your role ({role})."
+        if is_final:
+            instructions = (
+                "Before assembling the final deliverable, review ALL messages and contributions from ALL agents in this session. "
+                "Collect every piece of code, design spec, and implementation detail that was produced. "
+                "Do not skip any agent's contribution. Your deliverable must reflect the complete team output, not just your own work.\n\n"
+                f"This is the FINAL ROUND. Participate according to your role ({role}) and produce the complete deliverable.\n\n"
+                "When delivering code files, you MUST use this exact format for each file:\n"
+                "## FILE 1: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "## FILE 2: filename.ext\n"
+                "```language\n"
+                "...complete file content...\n"
+                "```\n"
+                "One ## FILE N: header per file. Every file gets its own header and its own code fence. "
+                "Never combine multiple files into one block. "
+                "This format is required — it is how the platform extracts and delivers your project files to the user."
+            )
+        else:
+            instructions = f"Participate in Round {round_number} according to your role ({role})."
 
     return base + instructions
 
