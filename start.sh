@@ -24,9 +24,19 @@ echo "Starting Docker..."
 cd ~/AgentLink && sudo docker-compose up -d
 sleep 5
 
+if [ ! -f ~/AgentLink/backend/venv/bin/uvicorn ]; then
+    echo "⚠️  venv not found — installing..."
+    cd ~/AgentLink/backend && python3 -m venv venv && venv/bin/pip install -r requirements.txt && venv/bin/pip install google-genai flask
+fi
+
 echo "Starting Backend..."
 cd ~/AgentLink/backend && venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
 sleep 10
+
+if [ ! -f ~/AgentLink/frontend/node_modules/.bin/next ]; then
+    echo "⚠️  node_modules not found — installing..."
+    cd ~/AgentLink/frontend && npm install && npm run build
+fi
 
 echo "Starting Frontend..."
 cd ~/AgentLink/frontend && node node_modules/.bin/next start -p 3001 -H 0.0.0.0 > /tmp/frontend.log 2>&1 &
@@ -94,7 +104,7 @@ echo ""
             sed -i "s|https://[a-z0-9-]*\.trycloudflare\.com/api/v1/health|${NEW_URL}/api/v1/health|g" index.html
             sed -i "s|https://[a-z0-9-]*\.trycloudflare\.com/directory|${NEW_URL}/directory|g" index.html
             git add index.html
-            git diff --cached --quiet || (git commit -m "chore: update tunnel URL in landing" && git push origin main)
+            git diff --cached --quiet || (git commit -m "chore: update tunnel URL in landing" && git config credential.helper store && git push origin main)
             echo "OK Landing page updated and pushed"
 
             echo ""
